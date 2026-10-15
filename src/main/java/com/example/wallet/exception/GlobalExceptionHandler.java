@@ -55,7 +55,7 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * Handles database constraint violations (for example a duplicate idempotency key under a race).
+     * Handles database constraint violations.
      *
      * @param e the exception
      * @return a 409 response with a generic message

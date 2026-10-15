@@ -37,18 +37,11 @@ public class TransactionService {
      * <ol>
      *   <li>Idempotency: if a non-blank key is given and a transaction with that key already exists, that
      *       transaction is returned unchanged when it was made by the same sender wallet (no new transfer); a
-     *       key belonging to another sender yields 409. A blank key is treated as no key. The key is not
-     *       checked against the request body, so a reused key with a different body returns the original
-     *       transaction. Two concurrent requests with the same new key can both pass this check; the unique
-     *       constraint rejects the second insert, which surfaces as a data-integrity error (409 via
-     *       {@code GlobalExceptionHandler}) if raised inside the handler chain.</li>
+     *       key belonging to another sender yields 409. A blank key is treated as no key.</li>
      *   <li>The receiver is resolved from {@code receiverWalletId} if present, otherwise from
      *       {@code receiverUsername}. Transferring to oneself is rejected.</li>
      *   <li>Locking: both wallet rows are locked with {@code SELECT ... FOR UPDATE}, always in ascending id
-     *       order so that two opposite transfers between the same wallets cannot deadlock. Note that the
-     *       sender's wallet was already loaded earlier in this transaction (to get its id), so the persistence
-     *       context may hand back that instance rather than refreshed row state; the {@code @Version} check
-     *       below is what protects against a stale balance in that case.</li>
+     *       order so that two opposite transfers between the same wallets cannot deadlock.</li>
      *   <li>Checks, in order: same currency, then sufficient balance ({@code balance >= amount}).</li>
      *   <li>The sender is debited, the receiver credited, and a {@code COMPLETED} transaction is saved.
      *       Wallets also carry a {@code @Version} column, so the optimistic version is incremented on each
@@ -164,7 +157,7 @@ public class TransactionService {
     }
 
     /**
-     * Lists every transaction in the system, unpaginated. Intended for the admin endpoint.
+     * Lists every transaction in the system. Intended for the admin endpoint.
      *
      * @return all transactions
      */

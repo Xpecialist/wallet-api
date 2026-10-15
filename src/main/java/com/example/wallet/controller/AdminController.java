@@ -26,7 +26,7 @@ public class AdminController {
     }
 
     /**
-     * {@code GET /api/admin/users}. Admin only. Lists all users (without password hashes), unpaginated.
+     * {@code GET /api/admin/users}. Admin only. Lists all users (without password hashes).
      *
      * @return all users (errors: 401 if not authenticated, 403 if not an admin)
      */
@@ -34,7 +34,7 @@ public class AdminController {
     public List<UserResponse> users() { return users.findAll().stream().map(UserResponse::from).toList(); }
 
     /**
-     * {@code GET /api/admin/transactions}. Admin only. Lists all transactions, unpaginated.
+     * {@code GET /api/admin/transactions}. Admin only. Lists all transactions.
      *
      * @return all transactions (errors: 401 if not authenticated, 403 if not an admin)
      */
