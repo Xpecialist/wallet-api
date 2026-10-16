@@ -64,6 +64,18 @@ java -jar target/wallet-api-0.0.1-SNAPSHOT.jar
 
 The API listens on `http://localhost:8080`.
 
+## Frontend
+
+A React UI lives in `frontend/` (Vite, React Router, plain fetch). With the API running on port 8080:
+
+```
+cd frontend
+npm install
+npm run dev
+```
+
+Then open `http://localhost:5173`. The dev server proxies `/api` to the backend. See `frontend/README.md` for details.
+
 ## Data model
 
 Defined in `src/main/resources/schema.sql`, which runs on every startup. It is idempotent: tables are `CREATE TABLE IF NOT EXISTS`, and the `ALTER TABLE` statements at the end upgrade a database created by an earlier version without dropping data.

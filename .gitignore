@@ -4,3 +4,6 @@ target/
 .vscode/
 .env
 *.log
+
+frontend/node_modules/
+frontend/dist/
