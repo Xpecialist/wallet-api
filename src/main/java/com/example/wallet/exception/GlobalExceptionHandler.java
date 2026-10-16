@@ -4,6 +4,9 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.InvalidDataAccessApiUsageException;
+import org.springframework.data.mapping.PropertyReferenceException;
+import org.springframework.security.authentication.DisabledException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -52,6 +55,28 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BadCredentialsException.class)
     public ResponseEntity<Map<String, Object>> badCreds(BadCredentialsException e) {
         return body(HttpStatus.UNAUTHORIZED, "Invalid username or password");
+    }
+
+    /**
+     * Handles login attempts by a disabled user.
+     *
+     * @param e the exception
+     * @return a 403 response
+     */
+    @ExceptionHandler(DisabledException.class)
+    public ResponseEntity<Map<String, Object>> disabled(DisabledException e) {
+        return body(HttpStatus.FORBIDDEN, "Account is disabled");
+    }
+
+    /**
+     * Handles an unknown sort property in a paged request.
+     *
+     * @param e the exception
+     * @return a 400 response
+     */
+    @ExceptionHandler({PropertyReferenceException.class, InvalidDataAccessApiUsageException.class})
+    public ResponseEntity<Map<String, Object>> badSort(Exception e) {
+        return body(HttpStatus.BAD_REQUEST, "Invalid sort parameter");
     }
 
     /**

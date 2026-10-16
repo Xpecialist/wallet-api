@@ -5,8 +5,9 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
- * A transfer of funds between two wallets, stored in the {@code transactions} table. Wallets are referenced by id
- * only. The optional idempotency key is unique across all transactions.
+ * A movement of funds, stored in the {@code transactions} table: a transfer between two wallets, a deposit into one
+ * wallet, or a withdrawal from one wallet. Wallets are referenced by id only; the side outside the system is
+ * {@code null}. The optional idempotency key is unique across all transactions.
  */
 @Entity
 @Table(name = "transactions")
@@ -15,11 +16,18 @@ public class Transaction {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "sender_wallet_id", nullable = false)
+    @Column(name = "sender_wallet_id")
     private Long senderWalletId;
 
-    @Column(name = "receiver_wallet_id", nullable = false)
+    @Column(name = "receiver_wallet_id")
     private Long receiverWalletId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private TransactionType type = TransactionType.TRANSFER;
+
+    @Column(length = 255)
+    private String note;
 
     @Column(nullable = false, precision = 19, scale = 4)
     private BigDecimal amount;
@@ -40,14 +48,22 @@ public class Transaction {
 
     /** @return the generated database id, or {@code null} before the transaction is saved */
     public Long getId() { return id; }
-    /** @return the id of the wallet that was debited */
+    /** @return the id of the wallet that was debited, or {@code null} for a deposit */
     public Long getSenderWalletId() { return senderWalletId; }
-    /** @param v the id of the wallet that is debited */
+    /** @param v the id of the wallet that is debited, or {@code null} for a deposit */
     public void setSenderWalletId(Long v) { this.senderWalletId = v; }
-    /** @return the id of the wallet that was credited */
+    /** @return the id of the wallet that was credited, or {@code null} for a withdrawal */
     public Long getReceiverWalletId() { return receiverWalletId; }
-    /** @param v the id of the wallet that is credited */
+    /** @param v the id of the wallet that is credited, or {@code null} for a withdrawal */
     public void setReceiverWalletId(Long v) { this.receiverWalletId = v; }
+    /** @return the transaction type */
+    public TransactionType getType() { return type; }
+    /** @param type the transaction type */
+    public void setType(TransactionType type) { this.type = type; }
+    /** @return the optional note, or {@code null} */
+    public String getNote() { return note; }
+    /** @param note the optional note (at most 255 characters), or {@code null} */
+    public void setNote(String note) { this.note = note; }
     /** @return the transferred amount */
     public BigDecimal getAmount() { return amount; }
     /** @param amount the transferred amount */

@@ -8,15 +8,18 @@ import java.time.LocalDateTime;
  * Transaction representation returned by the API.
  *
  * @param id               transaction id
- * @param senderWalletId   id of the debited wallet
- * @param receiverWalletId id of the credited wallet
+ * @param senderWalletId   id of the debited wallet, or {@code null} for a deposit
+ * @param receiverWalletId id of the credited wallet, or {@code null} for a withdrawal
  * @param amount           transferred amount
+ * @param type             type name: {@code TRANSFER}, {@code DEPOSIT} or {@code WITHDRAWAL}
  * @param status           status name, e.g. {@code COMPLETED}
+ * @param note             optional note, or {@code null}
  * @param createdAt        creation timestamp
- * @param idempotencyKey   idempotency key used for the transfer, or {@code null}
+ * @param idempotencyKey   idempotency key used for the request, or {@code null}
  */
 public record TransactionResponse(Long id, Long senderWalletId, Long receiverWalletId, BigDecimal amount,
-                                  String status, LocalDateTime createdAt, String idempotencyKey) {
+                                  String type, String status, String note, LocalDateTime createdAt,
+                                  String idempotencyKey) {
     /**
      * Maps a transaction entity to its response form.
      *
@@ -25,6 +28,6 @@ public record TransactionResponse(Long id, Long senderWalletId, Long receiverWal
      */
     public static TransactionResponse from(Transaction t) {
         return new TransactionResponse(t.getId(), t.getSenderWalletId(), t.getReceiverWalletId(), t.getAmount(),
-                t.getStatus().name(), t.getCreatedAt(), t.getIdempotencyKey());
+                t.getType().name(), t.getStatus().name(), t.getNote(), t.getCreatedAt(), t.getIdempotencyKey());
     }
 }
