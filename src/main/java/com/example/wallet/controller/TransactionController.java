@@ -1,10 +1,14 @@
 package com.example.wallet.controller;
 
+import com.example.wallet.dto.PageResponse;
+import com.example.wallet.dto.TransactionFilter;
 import com.example.wallet.dto.TransactionResponse;
 import com.example.wallet.dto.TransferRequest;
 import com.example.wallet.service.TransactionService;
 import jakarta.validation.Valid;
-import java.util.List;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -39,13 +43,24 @@ public class TransactionController {
     }
 
     /**
-     * {@code GET /api/transactions}. Any authenticated user. Lists the caller's transactions, newest first.
+     * {@code GET /api/transactions}. Any authenticated user. Lists the caller's transactions, newest first by
+     * default. Query parameters: {@code page} (zero-based), {@code size} (default 20, at most 100),
+     * {@code sort} (for example {@code amount,asc}), and the filters {@code from}, {@code to} ({@code yyyy-MM-dd}),
+     * {@code minAmount}, {@code maxAmount}, {@code status}, {@code type}.
      *
-     * @param auth the authenticated caller
-     * @return the transactions (errors: 401 if not authenticated, 404 if the caller has no wallet)
+     * @param filter   the optional filters
+     * @param pageable page number, size and sort
+     * @param auth     the authenticated caller
+     * @return one page of transactions (errors: 400 for an invalid parameter or sort property,
+     *         401 if not authenticated, 404 if the caller has no wallet)
      */
     @GetMapping
-    public List<TransactionResponse> history(Authentication auth) { return service.history(auth.getName()); }
+    public PageResponse<TransactionResponse> history(
+            TransactionFilter filter,
+            @PageableDefault(sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable,
+            Authentication auth) {
+        return service.history(auth.getName(), filter, pageable);
+    }
 
     /**
      * {@code GET /api/transactions/{id}}. Authenticated; allowed for the sender, the receiver, or an admin.

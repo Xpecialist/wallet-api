@@ -24,6 +24,9 @@ public class User {
     @Column(nullable = false, length = 20)
     private Role role = Role.USER;
 
+    @Column(nullable = false)
+    private boolean enabled = true;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -49,6 +52,10 @@ public class User {
     public Role getRole() { return role; }
     /** @param role the user's role */
     public void setRole(Role role) { this.role = role; }
+    /** @return {@code true} if the user may log in and use the API; defaults to {@code true} */
+    public boolean isEnabled() { return enabled; }
+    /** @param enabled {@code false} to disable the user */
+    public void setEnabled(boolean enabled) { this.enabled = enabled; }
     /** @return the creation timestamp, set automatically on first save */
     public LocalDateTime getCreatedAt() { return createdAt; }
 }

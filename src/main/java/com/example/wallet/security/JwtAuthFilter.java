@@ -17,8 +17,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
  * Servlet filter that authenticates requests carrying an {@code Authorization: Bearer <jwt>} header. A valid
- * token whose user still exists puts an authentication (with the user's current role from the database) into the
- * security context. A missing or invalid token is silently ignored, leaving the request unauthenticated so that
+ * token whose user still exists and is enabled puts an authentication (with the user's current role from the
+ * database) into the security context; tokens of disabled users are rejected. A missing or invalid token is silently ignored, leaving the request unauthenticated so that
  * {@link SecurityConfig} rejects it with 401 if the endpoint requires authentication.
  */
 @Component
@@ -55,9 +55,11 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             try {
                 String username = jwtService.extractUsername(header.substring(7));
                 UserDetails user = userDetailsService.loadUserByUsername(username);
-                var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
-                auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                SecurityContextHolder.getContext().setAuthentication(auth);
+                if (user.isEnabled()) {
+                    var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+                    auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                    SecurityContextHolder.getContext().setAuthentication(auth);
+                }
             } catch (JwtException | IllegalArgumentException | UsernameNotFoundException ignored) {
                 // invalid token: leave unauthenticated; security config responds with 401
             }

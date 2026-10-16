@@ -58,7 +58,8 @@ public class SecurityConfig {
     }
 
     /**
-     * Loads users from the database for authentication. The role becomes the authority {@code ROLE_<role>}.
+     * Loads users from the database for authentication. The role becomes the authority {@code ROLE_<role>}, and a
+     * disabled user is reported as disabled.
      *
      * @param users the user repository
      * @return a service that throws {@link UsernameNotFoundException} for unknown usernames
@@ -69,6 +70,7 @@ public class SecurityConfig {
                 .map(u -> org.springframework.security.core.userdetails.User.withUsername(u.getUsername())
                         .password(u.getPasswordHash())
                         .roles(u.getRole().name())
+                        .disabled(!u.isEnabled())
                         .build())
                 .orElseThrow(() -> new UsernameNotFoundException("User not found"));
     }
