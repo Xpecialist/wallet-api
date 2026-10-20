@@ -106,3 +106,11 @@ Not checked manually: phone-width layout, Wallet lookup, Profile, admin deposit 
 
 ### Next steps
 - Backend code review; end-to-end check of the remaining UI screens and phone layout.
+
+## Where we stopped (2026-10-20, branch `Testing`, last commit 02cfab5)
+All bugs found so far are fixed (2 backend, 3 frontend); `mvn test`, `mvn verify` and `npm test` are green.
+Still to do:
+- Backend code review (bugs/security that tests would miss).
+- Manual UI check of the remaining screens: Profile, Wallet lookup, admin deposit, all-transactions view, phone layout.
+- Decide whether to fix the open idempotency item (simultaneous same-key replays return 409).
+Next step planned: run the backend code review.
