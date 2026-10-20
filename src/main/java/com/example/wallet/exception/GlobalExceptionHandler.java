@@ -6,6 +6,7 @@ import java.util.Map;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.data.mapping.PropertyReferenceException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.authentication.DisabledException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -88,6 +89,18 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, Object>> integrity(DataIntegrityViolationException e) {
         return body(HttpStatus.CONFLICT, "Data conflict");
+    }
+
+    /**
+     * Handles a concurrent-update clash detected by the wallet {@code @Version} check (normally prevented by the
+     * row locks).
+     *
+     * @param e the exception
+     * @return a 409 response telling the client to retry
+     */
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<Map<String, Object>> optimisticLock(ObjectOptimisticLockingFailureException e) {
+        return body(HttpStatus.CONFLICT, "Concurrent update, please retry");
     }
 
     private ResponseEntity<Map<String, Object>> body(HttpStatus status, String message) {

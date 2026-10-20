@@ -45,7 +45,7 @@ public class AdminController {
      *         403 if not an admin)
      */
     @GetMapping("/users")
-    public PageResponse<UserResponse> users(@PageableDefault(sort = "id") Pageable pageable) {
+    public PageResponse<UserResponse> users(@PageableDefault(size = 20, sort = "id") Pageable pageable) {
         return users.listAll(pageable);
     }
 
@@ -77,7 +77,7 @@ public class AdminController {
     @GetMapping("/transactions")
     public PageResponse<TransactionResponse> transactions(
             TransactionFilter filter,
-            @PageableDefault(sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         return transactions.listAll(filter, pageable);
     }
 

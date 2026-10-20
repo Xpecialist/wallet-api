@@ -57,7 +57,7 @@ public class TransactionController {
     @GetMapping
     public PageResponse<TransactionResponse> history(
             TransactionFilter filter,
-            @PageableDefault(sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable,
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable,
             Authentication auth) {
         return service.history(auth.getName(), filter, pageable);
     }

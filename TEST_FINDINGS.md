@@ -1,16 +1,16 @@
 # Wallet API: test findings (2026-10-20)
 
-Branch: `feature/react-ui`. Nothing from this work is committed yet.
-Results below are the tester agent's reports; only partly re-verified.
+Results below are from after the fixes; see `CHANGES_LOG.md` for what was changed and why.
+Original failing counts (before fixes): unit 118/119, integration 67/78.
 
 ## Status
 
 | Suite | Command | Tests | Pass | Fail |
 |---|---|---|---|---|
-| Unit (Mockito, no DB) | `mvn test` | 119 | 118 | 1 |
-| Integration (real PostgreSQL) | `mvn verify` | 78 | 67 | 11 |
+| Unit (Mockito, no DB) | `mvn test` | 119 | 119 | 0 |
+| Integration (real PostgreSQL) | `mvn verify` | 78 | 78 | 0 |
 
-Both failing groups come from the two bugs below. `src/main` was NOT changed.
+Bugs 1 and 2 below are FIXED (see `CHANGES_LOG.md`). The sections below describe them as originally found. Item 3 was checked: simultaneous same-key replays get 409 for all but one request, money is safe; left as is.
 
 ## Bugs to fix
 
@@ -55,3 +55,8 @@ After bug 1 is fixed, `parallelReplayOfSameIdempotencyKey...` may still get 409 
 1. Fix bugs 1 and 2 with the builder, then re-run `mvn test` and `mvn verify`.
 2. Re-check the idempotency race (item 3).
 3. Run a code review of the backend, then add frontend tests and an end-to-end check.
+
+## Open items (decided: fix later)
+- Simultaneous replays of the same Idempotency-Key return 409 for all but one request instead of the original
+  transaction (money is safe). May become a problem for clients that retry in-flight requests; see CHANGES_LOG.md
+  ("Item 3"). The React UI has not been checked for this.

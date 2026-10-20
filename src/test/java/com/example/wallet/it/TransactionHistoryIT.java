@@ -120,12 +120,12 @@ class TransactionHistoryIT extends ItBase {
     }
 
     /**
-     * KNOWN BUG (do not fix here): documented default page size is 20 (spring.data.web.pageable.default-page-size and
+     * Regression test (formerly KNOWN_BUG_...): documented default page size is 20 (spring.data.web.pageable.default-page-size and
      * README) but the controllers' {@code @PageableDefault} resolves to Spring's own default of 10.
-     * This test asserts the DOCUMENTED behaviour and is EXPECTED TO FAIL until the bug is fixed.
+     * Asserts the DOCUMENTED behaviour; failed before the @PageableDefault size fix.
      */
     @Test
-    void KNOWN_BUG_defaultPageSizeShouldBe20NotTen_userHistory() throws Exception {
+    void defaultPageSizeIs20_userHistory() throws Exception {
         for (int i = 0; i < 20; i++) deposit(alice, "1", null); // alice now has 25 transactions
         JsonNode b = body(getJson("/api/transactions", alice));
         assertThat(b.get("totalElements").asLong()).isEqualTo(25);
@@ -133,18 +133,18 @@ class TransactionHistoryIT extends ItBase {
         assertThat(b.get("content")).as("rows on first page with default size").hasSize(20);
     }
 
-    /** KNOWN BUG (same root cause), admin transactions list. EXPECTED TO FAIL until fixed. */
+    /** Regression test (formerly KNOWN_BUG_..., same root cause), admin transactions list. */
     @Test
-    void KNOWN_BUG_defaultPageSizeShouldBe20NotTen_adminTransactions() throws Exception {
+    void defaultPageSizeIs20_adminTransactions() throws Exception {
         for (int i = 0; i < 20; i++) deposit(alice, "1", null); // 26 transactions in total
         JsonNode b = body(getJson("/api/admin/transactions", admin));
         assertThat(b.get("size").asInt()).as("default page size (documented: 20)").isEqualTo(20);
         assertThat(b.get("content")).hasSize(20);
     }
 
-    /** KNOWN BUG (same root cause), admin users list. EXPECTED TO FAIL until fixed. */
+    /** Regression test (formerly KNOWN_BUG_..., same root cause), admin users list. */
     @Test
-    void KNOWN_BUG_defaultPageSizeShouldBe20NotTen_adminUsers() throws Exception {
+    void defaultPageSizeIs20_adminUsers() throws Exception {
         for (int i = 0; i < 12; i++) register("extra" + i); // 4 + 12 = 16 users... plus 6 more below
         for (int i = 12; i < 18; i++) register("extra" + i); // 22 users total
         JsonNode b = body(getJson("/api/admin/users", admin));
