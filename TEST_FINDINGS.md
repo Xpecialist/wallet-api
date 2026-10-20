@@ -81,3 +81,29 @@ After bug 1 is fixed, `parallelReplayOfSameIdempotencyKey...` may still get 409 
 - Simultaneous replays of the same Idempotency-Key return 409 for all but one request instead of the original
   transaction (money is safe). May become a problem for clients that retry in-flight requests; see CHANGES_LOG.md
   ("Item 3"). The React UI has not been checked for this.
+
+## Frontend tests and UI check (2026-10-20)
+
+### Automated frontend tests (Vitest, `cd frontend && npm test`)
+- 185 tests (mocked network; no backend or DB needed): 182 pass, 3 fail ON PURPOSE, each labelled `BUG:` (see below).
+- Config in `frontend/vitest.config.js` (vite.config.js untouched); tests in `frontend/tests/`.
+- Covers: API client (auth header, Idempotency-Key, error mapping, 401 handling), AuthContext and route protection (USER vs ADMIN), format utils, useFetch, money forms (validation, double submit, notes, idempotency keys), transaction browser/pagination/filters, Profile, Wallet lookup, admin pages.
+
+### Open frontend bugs (failing `BUG:` tests; NOT fixed yet)
+1. `BUG: a failing wallet call (404/500) discards the successfully loaded profile` (`tests/auth.test.jsx`). If `/api/users/me` succeeds but `/api/wallets/me` fails with a non-401 error, the app shows "Could not load your profile." and the navbar loses the username and Admin link (`Promise.all` rejects, so neither user nor wallet is set). Location: profile/wallet load effect in `src/auth/AuthContext.jsx`. Fix: load them independently (e.g. `Promise.allSettled`). Most significant of the three.
+2. `BUG: a receiver that is only whitespace passes client validation and is sent as an empty username` (`tests/money.test.jsx`). `required` accepts "   " and the code trims only after validation; the request goes out with `receiverUsername: ''` (server answers 400). Location: `submit` in `src/pages/TransferPage.jsx`. Minor.
+3. `BUG: null is formatted as 0.00 instead of "-"` (`tests/format.test.js`). `Number(null)` is 0. Location: `src/utils/format.js`. Cosmetic.
+
+### Manual UI check in the browser (test stack: backend 8081 + `walletdb_test`, Vite 5174)
+Worked: register, session survives reload, deposit, overdraft rejected with "Insufficient funds" (balance unchanged), transfer with note, history list and counts, wrong-password error, logout, USER redirected away from `/admin/users` with no admin links, admin login, admin users list, disable/enable a user. Browser console showed only the expected 422 and 401 responses.
+Not checked manually: phone-width layout, Wallet lookup, Profile, admin deposit and all-transactions views, login by a disabled user.
+
+### Observations (not bugs)
+- The History page sends page size 10 itself, while the API default is now 20.
+- A retry after a failed request gets a NEW idempotency key, so the server cannot dedupe it; the UI only blocks double submit while a request is in flight. Related to the open simultaneous-replay item above.
+- The UI has no client-side self-transfer check; it relies on the server's 400.
+- jsdom does not enforce `minlength`; tests check the attributes instead.
+
+### Next steps
+- Fix the 3 frontend bugs (then the `BUG:` tests should pass; rename them), re-run `npm test`.
+- Backend code review; end-to-end check of the remaining UI screens and phone layout.
