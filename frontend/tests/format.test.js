@@ -22,7 +22,7 @@ describe('formatMoney', () => {
     expect(formatMoney('abc', 'USD')).toBe('-');
     expect(formatMoney(undefined)).toBe('-');
   });
-  it('BUG: null is formatted as 0.00 instead of "-"', () => {
+  it('null is formatted as 0.00 instead of "-"', () => {
     expect(formatMoney(null)).toBe('-');
   });
 });

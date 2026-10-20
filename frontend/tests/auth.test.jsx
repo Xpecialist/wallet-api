@@ -256,7 +256,7 @@ describe('route protection', () => {
     expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
   });
 
-  it('BUG: a failing wallet call (404/500) discards the successfully loaded profile (Promise.all in AuthContext)', async () => {
+  it('a failing wallet call (404/500) discards the successfully loaded profile (Promise.all in AuthContext)', async () => {
     mockFetch({
       'GET /api/users/me': res(200, USER),
       'GET /api/wallets/me': res(404, { error: 'No wallet' }),

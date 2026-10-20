@@ -1,5 +1,6 @@
 /** Formats an amount with 2 to 4 decimals plus the currency code, e.g. "74.50 USD". */
 export function formatMoney(value, currency = '') {
+  if (value === null || value === undefined || value === '') return '-';
   const n = Number(value);
   if (Number.isNaN(n)) return '-';
   const text = n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 });

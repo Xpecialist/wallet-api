@@ -41,13 +41,13 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     if (!authenticated) return undefined;
     let cancelled = false;
-    Promise.all([api.me(), api.myWallet()])
+    // Independent loads: a failing wallet call must not discard the profile (a 401 still signs out via the handler).
+    Promise.allSettled([api.me(), api.myWallet()])
       .then(([u, w]) => {
         if (cancelled) return;
-        setUser(u);
-        setWallet(w);
+        if (u.status === 'fulfilled') setUser(u.value);
+        if (w.status === 'fulfilled') setWallet(w.value);
       })
-      .catch(() => {})
       .finally(() => {
         if (!cancelled) setReady(true);
       });

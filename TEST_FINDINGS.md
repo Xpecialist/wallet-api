@@ -89,7 +89,7 @@ After bug 1 is fixed, `parallelReplayOfSameIdempotencyKey...` may still get 409 
 - Config in `frontend/vitest.config.js` (vite.config.js untouched); tests in `frontend/tests/`.
 - Covers: API client (auth header, Idempotency-Key, error mapping, 401 handling), AuthContext and route protection (USER vs ADMIN), format utils, useFetch, money forms (validation, double submit, notes, idempotency keys), transaction browser/pagination/filters, Profile, Wallet lookup, admin pages.
 
-### Open frontend bugs (failing `BUG:` tests; NOT fixed yet)
+### Frontend bugs (FIXED, see FRONTEND_CHANGES_LOG.md; `BUG:` prefix removed from the tests, 185/185 pass)
 1. `BUG: a failing wallet call (404/500) discards the successfully loaded profile` (`tests/auth.test.jsx`). If `/api/users/me` succeeds but `/api/wallets/me` fails with a non-401 error, the app shows "Could not load your profile." and the navbar loses the username and Admin link (`Promise.all` rejects, so neither user nor wallet is set). Location: profile/wallet load effect in `src/auth/AuthContext.jsx`. Fix: load them independently (e.g. `Promise.allSettled`). Most significant of the three.
 2. `BUG: a receiver that is only whitespace passes client validation and is sent as an empty username` (`tests/money.test.jsx`). `required` accepts "   " and the code trims only after validation; the request goes out with `receiverUsername: ''` (server answers 400). Location: `submit` in `src/pages/TransferPage.jsx`. Minor.
 3. `BUG: null is formatted as 0.00 instead of "-"` (`tests/format.test.js`). `Number(null)` is 0. Location: `src/utils/format.js`. Cosmetic.
@@ -105,5 +105,4 @@ Not checked manually: phone-width layout, Wallet lookup, Profile, admin deposit 
 - jsdom does not enforce `minlength`; tests check the attributes instead.
 
 ### Next steps
-- Fix the 3 frontend bugs (then the `BUG:` tests should pass; rename them), re-run `npm test`.
 - Backend code review; end-to-end check of the remaining UI screens and phone layout.

@@ -17,12 +17,17 @@ export default function TransferPage() {
   const [success, setSuccess] = useState('');
 
   async function submit() {
-    setBusy(true);
     setError('');
     setSuccess('');
+    const target = receiver.trim();
+    if (!target) {
+      setError(mode === 'username' ? 'Receiver username is required.' : 'Receiver wallet ID is required.');
+      return;
+    }
+    setBusy(true);
     const body = { amount };
-    if (mode === 'username') body.receiverUsername = receiver.trim();
-    else body.receiverWalletId = Number(receiver);
+    if (mode === 'username') body.receiverUsername = target;
+    else body.receiverWalletId = Number(target);
     if (note.trim()) body.note = note.trim();
     try {
       const tx = await api.transfer(body, newIdempotencyKey());

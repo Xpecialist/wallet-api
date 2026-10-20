@@ -354,7 +354,7 @@ describe('Transfer page', () => {
     await screen.findByRole('status');
   });
 
-  it('BUG: a receiver that is only whitespace passes client validation and is sent as an empty username', async () => {
+  it('a receiver that is only whitespace passes client validation and is sent as an empty username', async () => {
     const { f, user } = await open({ 'POST /api/transactions/transfer': res(400, { error: 'Receiver required' }) });
     await user.type(receiver(), '   ');
     await user.type(amount(), '1');
