@@ -113,4 +113,45 @@ Still to do:
 - Backend code review (bugs/security that tests would miss).
 - Manual UI check of the remaining screens: Profile, Wallet lookup, admin deposit, all-transactions view, phone layout.
 - Decide whether to fix the open idempotency item (simultaneous same-key replays return 409).
-Next step planned: run the backend code review.
+Backend code review is done (see the section below); next: triage and fix its findings.
+
+## Backend code review (2026-10-21, read-only code-reviewer agent)
+Nothing fixed yet. Findings are the reviewer's, confirmed by it in the code but NOT re-verified by me. It did NOT run `mvn dependency:tree`; the dependency/CVE statements come from the Spring Boot 3.3.5 BOM from memory and must be checked with a scanner. Runtime behavior (e.g. the date-filter 500, overflow handling) was not tested. 0 critical, 2 high, 7 medium, 11 low.
+
+### HIGH
+- **H1. Built-in default JWT secret allows forging an admin token.** `application.properties:18` `app.jwt.secret=${JWT_SECRET:<committed default>}`; `JwtService` only checks key length. If a deployment forgets `JWT_SECRET`, anyone with the repo can mint an HS256 token with `sub=admin`, get admin access and mint money via `/api/admin/wallets/{id}/deposit`. Fix: remove the default so startup fails without a secret, or fail fast outside a `dev` profile when the known default is in use.
+- **H2. Any user can mint unlimited money.** `POST /api/wallets/me/deposit` (`WalletController.deposit` -> `TransactionService.depositToOwn`, ~TS:178) has no payment backing and no cap beyond the max amount per call; `app.wallet.initial-balance=100.00` gives every new account free funds; registration has no throttle (see M1). Fine if the app is a simulation; otherwise gate self-deposit behind a flag/profile (off by default) or remove it, and default the initial balance to 0 outside dev.
+
+### MEDIUM
+- **M1. No rate limiting / brute-force protection** on `/api/auth/**` and `/api/users/me/password` (`SecurityConfig`, `AuthController`). Unlimited password guessing and mass registration (feeds H2). Fix: per-IP and per-username throttling (e.g. Bucket4j), optional lockout.
+- **M2. Login reveals disabled accounts without a valid password.** `GlobalExceptionHandler.disabled(DisabledException)` returns 403 "Account is disabled" because `DaoAuthenticationProvider` checks enabled before the password; everything else is 401. Fix: map it to the same 401 "Invalid username or password".
+- **M3. Idempotency key is global, not per user.** `schema.sql:29` `idempotency_key VARCHAR(100) UNIQUE`; lookups at TS:75, 147, 202. Another user can probe or squat a key (victim's request then gets 409). `TransactionResponse` also returns `idempotencyKey` to the other party (a receiver can read the sender's key via `GET /api/transactions/{id}`). Fix: unique on (wallet id, key) or scope by owner; omit the key from responses to non-owners.
+- **M4. Idempotent replay does not compare the payload, and transfer replay does not check the type.** TS:76-81, 148-153, 203-208. Same key with a different amount/receiver/note silently returns the original transaction; `transfer()` only compares `senderWalletId`, so a WITHDRAWAL from the same wallet with that key is returned as a transfer. Fix: store a request fingerprint or compare amount, receiver and type; return 409/422 on mismatch. (Related to the open simultaneous-replay item.)
+- **M5. Old dependencies (to be confirmed with a scanner).** `pom.xml:8` Spring Boot 3.3.5 (Oct 2024) is past OSS support. Transitives from the BOM may carry known CVEs (Tomcat 10.1.31, Spring Security 6.3.4 incl. BCrypt/72-byte password handling, Spring Framework 6.1.14, pgjdbc 42.7.4). Fix: upgrade to a supported Boot 3.4/3.5+, run `mvn dependency:tree` and an OWASP/Dependabot scan.
+- **M6. `schema.sql` runs on every start with locking DDL.** `spring.sql.init.mode=always` (`application.properties:10`); `schema.sql:36-42` drops and re-adds `chk_tx_type_wallets` each boot (ACCESS EXCLUSIVE lock, full revalidation; concurrent starts can deadlock/fail; may fail on legacy rows). Fix: Flyway/Liquibase or conditional ALTERs.
+- **M7. Default DB credentials / no TLS.** `application.properties:4-5` falls back to `postgres/postgres` with a plain `jdbc:` URL. Fix: require env vars outside dev; least-privilege DB user.
+
+### LOW
+- **L1.** Usernames/emails are case- and whitespace-sensitive (`schema.sql:3-4`; `existsByUsername/Email`): `Alice` and `alice` can both register, `bob ` with a trailing space is accepted; look-alike impersonation in username-based transfers. Fix: trim + lowercase, unique index on `lower(...)`.
+- **L2.** Idempotency-Key header length not validated: >100 chars hits the DB and the blanket `DataIntegrityViolationException` -> 409 mapping masks it (should be 400); it also masks CHECK/overflow errors. Fix: validate length, inspect the constraint name.
+- **L3.** Passwords over 72 BYTES are silently truncated by BCrypt (`@Size(max=72)` counts characters, multibyte passwords can exceed 72 bytes); `changePassword` does not reject new == current. Fix: validate UTF-8 byte length.
+- **L4.** Tokens not revoked on password change or demotion (claims: sub/iat/exp only, 1h). Disabled users are rejected correctly and the role is re-read each request. Fix: `tokenVersion`/`passwordChangedAt` claim checked in the filter.
+- **L5.** Admin bootstrap: no strength check on the admin password; if someone registers `admin` first the bootstrap silently skips, and if the `admin@example.com` email is taken `createUser` throws and ABORTS startup. Fix: reserve the admin username/email, fail with a clear log message.
+- **L6.** ID enumeration: `GET /api/wallets/{id}` and `/api/transactions/{id}` return 403 for existing and 404 for missing resources (`WalletService:43-47`, TS:277-285), ids are sequential. Fix: 404 in both cases.
+- **L7.** Sort accepts any entity property (`UserService.listAll`; admin only), e.g. `sort=passwordHash` (side channel for hash order); `InvalidDataAccessApiUsageException` mapped to "Invalid sort parameter" can mask real server bugs. Fix: whitelist sort properties.
+- **L8.** Date filter: an extreme `to` (near `LocalDate.MAX`) makes `plusDays(1)` throw `DateTimeException` (TS:322) -> likely 500 (NOT tested); `created_at` is `TIMESTAMP` without zone and uses server time. Fix: bound the dates, use `Instant`/`timestamptz`.
+- **L9.** Money edge cases: no app-level balance upper bound (repeated large deposits can overflow `NUMERIC(19,4)` and surface as 409 "Data conflict"); deposits/withdrawals don't check or record currency; transfers/deposits to disabled users' wallets allowed; no `CHECK (sender_wallet_id <> receiver_wallet_id)`; no CHECKs on `status`/`type`/`currency`.
+- **L10.** History query `(sender = ? OR receiver = ?) ORDER BY created_at` relies on separate single-column indexes; will not scale well. Consider UNION or composite indexes.
+- **L11.** Config hardening absent: no explicit CORS config (fine if same-origin/proxy intended, be explicit), no HSTS/HTTPS enforcement, no explicit `server.error.include-*=never` (Boot default already never), no request-size/username length caps beyond Tomcat defaults.
+
+### Info / looks solid
+- CSRF disabled is appropriate (stateless bearer API, no cookies). No actuator/H2 console/Swagger in the pom. No logging of secrets/PII found. Registration 409s reveal whether a username/email exists (inherent; pair with M1).
+- Solid: DB `CHECK (balance >= 0)` and `amount > 0`; BigDecimal with `@Digits(15,4)` and `@DecimalMin(0.0001)`; balance checked after the pessimistic lock + refresh; ascending lock order; principal-derived `me` endpoints (no IDOR there); owner-or-admin checks; `/api/admin/**` requires ROLE_ADMIN read live from the DB; jjwt signature/expiry/algorithm enforced (`alg=none` rejected), weak key rejected at startup; disabled/deleted users rejected on every request; narrow request DTOs (no mass assignment); BCrypt, no hash in responses; JPA Criteria/parameter binding (no string-built SQL), sort validated against entity properties, page size capped at 100; no stack traces in errors; unknown-user and wrong-password logins both 401 (apart from M2).
+
+### Reviewer could not verify
+Exact resolved dependency versions/CVEs; runtime behavior (date-filter 500, overflow surfacing, exception translation); documented intent for self-deposit or the default secret (README/CHANGES_LOG not read closely); frontend and tests were out of scope.
+
+### Suggested next steps
+1. Decide intent for H2 (is self-deposit a deliberate simulation?).
+2. Fix H1 (remove the default secret), M2 (disabled-login message), and the cheap mediums; re-run `mvn test` and `mvn verify`.
+3. Run `mvn dependency:tree` and a vulnerability scan to confirm M5.
