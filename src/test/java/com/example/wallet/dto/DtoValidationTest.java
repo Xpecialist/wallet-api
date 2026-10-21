@@ -59,6 +59,21 @@ class DtoValidationTest {
     }
 
     @Test
+    void passwordLimitIsCountedInUtf8BytesNotCharacters() {
+        String twoByte = "é"; // e with acute accent, 2 bytes in UTF-8
+        String ok72Bytes = twoByte.repeat(36); // 36 chars, 72 bytes
+        String bad73Bytes = twoByte.repeat(36) + "a"; // 37 chars, 73 bytes
+        assertThat(v.validate(new RegisterRequest("abc", "a@b.co", ok72Bytes))).isEmpty();
+        assertThat(fields(new RegisterRequest("abc", "a@b.co", bad73Bytes))).containsExactly("password");
+        assertThat(v.validate(new ChangePasswordRequest("old", ok72Bytes))).isEmpty();
+        assertThat(fields(new ChangePasswordRequest("old", bad73Bytes))).containsExactly("newPassword");
+        // 4-byte emoji: 18 of them are exactly 72 bytes (36 UTF-16 chars), 19 are not
+        String emoji = new String(Character.toChars(0x1F600));
+        assertThat(v.validate(new RegisterRequest("abc", "a@b.co", emoji.repeat(18)))).isEmpty();
+        assertThat(fields(new RegisterRequest("abc", "a@b.co", emoji.repeat(19)))).containsExactly("password");
+    }
+
+    @Test
     void loginRequestRequiresBothFields() {
         assertThat(v.validate(new LoginRequest("a", "b"))).isEmpty();
         assertThat(fields(new LoginRequest(" ", ""))).containsExactlyInAnyOrder("username", "password");

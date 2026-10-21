@@ -88,7 +88,7 @@ public class AdminController {
      * @param req            the amount
      * @param idempotencyKey optional {@code Idempotency-Key} header; repeating a key returns the original result
      * @return 201 with the DEPOSIT transaction (errors: 400 invalid amount, 401 not authenticated,
-     *         403 not an admin, 404 wallet not found, 409 idempotency key used for a different operation)
+     *         403 not an admin, 404 wallet not found, 409 idempotency key already used with a different request)
      */
     @PostMapping("/wallets/{id}/deposit")
     public ResponseEntity<TransactionResponse> deposit(

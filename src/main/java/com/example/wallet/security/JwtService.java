@@ -23,10 +23,12 @@ public class JwtService {
      *
      * @param secret       Base64-encoded secret; must decode to at least 32 bytes
      * @param expirationMs token lifetime in milliseconds
+     * @throws MissingJwtSecretException                  if the secret is null or blank (there is no default)
      * @throws io.jsonwebtoken.security.WeakKeyException if the decoded secret is too short
      */
-    public JwtService(@Value("${app.jwt.secret}") String secret,
+    public JwtService(@Value("${app.jwt.secret:}") String secret,
                       @Value("${app.jwt.expiration-ms}") long expirationMs) {
+        if (secret == null || secret.isBlank()) throw new MissingJwtSecretException();
         this.key = Keys.hmacShaKeyFor(Decoders.BASE64.decode(secret));
         this.expirationMs = expirationMs;
     }

@@ -97,7 +97,7 @@ describe('AmountForm (unit)', () => {
   });
 });
 
-describe('Dashboard deposit / withdraw', () => {
+describe('Dashboard withdraw (no self-service deposit)', () => {
   const section = (name) => screen.getByRole('heading', { name, level: 2 }).closest('section');
 
   it('shows the balance, wallet id and recent transactions', async () => {
@@ -125,18 +125,34 @@ describe('Dashboard deposit / withdraw', () => {
     expect(url.searchParams.get('sort')).toBe('createdAt,desc');
   });
 
-  it('deposit posts the amount with an Idempotency-Key, then refreshes wallet and history', async () => {
+  it('has no deposit form: only the withdraw form is offered', async () => {
+    mockFetch(authedHandlers());
+    renderApp('/', { token: 't' });
+    await screen.findByRole('heading', { name: 'Dashboard' });
+    expect(screen.queryByRole('heading', { name: 'Deposit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Deposit' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Withdraw', level: 2 })).toBeInTheDocument();
+  });
+
+  it('a regular user has no way to reach the old self-deposit endpoint from the UI', async () => {
+    const f = mockFetch(authedHandlers());
+    renderApp('/', { token: 't' });
+    await screen.findByRole('heading', { name: 'Dashboard' });
+    expect(f.callsTo('POST /api/wallets/me/deposit')).toHaveLength(0);
+  });
+
+  it('withdraw posts the amount with an Idempotency-Key, then refreshes wallet and history', async () => {
     const f = mockFetch({
       ...authedHandlers(),
-      'POST /api/wallets/me/deposit': res(200, { id: 55, amount: '25' }),
+      'POST /api/wallets/me/withdraw': res(200, { id: 55, amount: '25' }),
     });
     renderApp('/', { token: 't' });
     await screen.findByRole('heading', { name: 'Dashboard' });
     const user = userEvent.setup();
-    await user.type(within(section('Deposit')).getByLabelText('Amount'), '25');
-    await user.click(within(section('Deposit')).getByRole('button', { name: 'Deposit' }));
-    expect(await within(section('Deposit')).findByRole('status')).toHaveTextContent('transaction #55');
-    const call = f.callsTo('POST /api/wallets/me/deposit')[0];
+    await user.type(within(section('Withdraw')).getByLabelText('Amount'), '25');
+    await user.click(within(section('Withdraw')).getByRole('button', { name: 'Withdraw' }));
+    expect(await within(section('Withdraw')).findByRole('status')).toHaveTextContent('transaction #55');
+    const call = f.callsTo('POST /api/wallets/me/withdraw')[0];
     expect(call.body).toEqual({ amount: '25' });
     expect(call.init.headers['Idempotency-Key']).toMatch(UUID);
     expect(call.init.headers.Authorization).toBe('Bearer t');
@@ -175,21 +191,13 @@ describe('Dashboard deposit / withdraw', () => {
     await within(sec).findByRole('status');
   });
 
-  it('deposit and withdraw forms keep independent state', async () => {
-    mockFetch(authedHandlers());
-    renderApp('/', { token: 't' });
-    await screen.findByRole('heading', { name: 'Dashboard' });
-    await userEvent.setup().type(within(section('Deposit')).getByLabelText('Amount'), '7');
-    expect(within(section('Withdraw')).getByLabelText('Amount')).toHaveValue(null);
-  });
-
-  it('a 401 during a deposit signs the user out', async () => {
-    mockFetch({ ...authedHandlers(), 'POST /api/wallets/me/deposit': res(401) });
+  it('a 401 during a withdrawal signs the user out', async () => {
+    mockFetch({ ...authedHandlers(), 'POST /api/wallets/me/withdraw': res(401) });
     renderApp('/', { token: 't' });
     await screen.findByRole('heading', { name: 'Dashboard' });
     const user = userEvent.setup();
-    await user.type(within(section('Deposit')).getByLabelText('Amount'), '5');
-    await user.click(within(section('Deposit')).getByRole('button', { name: 'Deposit' }));
+    await user.type(within(section('Withdraw')).getByLabelText('Amount'), '5');
+    await user.click(within(section('Withdraw')).getByRole('button', { name: 'Withdraw' }));
     expect(await screen.findByRole('heading', { name: 'Log in' })).toBeInTheDocument();
   });
 

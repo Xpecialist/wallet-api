@@ -5,7 +5,8 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
- * Transaction representation returned by the API.
+ * Transaction representation returned by the API. The idempotency key is deliberately not included: both parties of
+ * a transfer can read the transaction, and the key belongs to the requester only.
  *
  * @param id               transaction id
  * @param senderWalletId   id of the debited wallet, or {@code null} for a deposit
@@ -15,11 +16,9 @@ import java.time.LocalDateTime;
  * @param status           status name, e.g. {@code COMPLETED}
  * @param note             optional note, or {@code null}
  * @param createdAt        creation timestamp
- * @param idempotencyKey   idempotency key used for the request, or {@code null}
  */
 public record TransactionResponse(Long id, Long senderWalletId, Long receiverWalletId, BigDecimal amount,
-                                  String type, String status, String note, LocalDateTime createdAt,
-                                  String idempotencyKey) {
+                                  String type, String status, String note, LocalDateTime createdAt) {
     /**
      * Maps a transaction entity to its response form.
      *
@@ -28,6 +27,6 @@ public record TransactionResponse(Long id, Long senderWalletId, Long receiverWal
      */
     public static TransactionResponse from(Transaction t) {
         return new TransactionResponse(t.getId(), t.getSenderWalletId(), t.getReceiverWalletId(), t.getAmount(),
-                t.getType().name(), t.getStatus().name(), t.getNote(), t.getCreatedAt(), t.getIdempotencyKey());
+                t.getType().name(), t.getStatus().name(), t.getNote(), t.getCreatedAt());
     }
 }

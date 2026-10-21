@@ -36,14 +36,15 @@ public class WalletService {
      * @param id   the wallet id
      * @param auth the authenticated caller
      * @return the wallet
-     * @throws ApiException 404 if the wallet does not exist; 403 if the caller is neither owner nor admin
+     * @throws ApiException 404 if the wallet does not exist or the caller is neither owner nor admin (the two cases
+     *         are indistinguishable, so ids cannot be probed)
      */
     @Transactional(readOnly = true)
     public WalletResponse getById(Long id, Authentication auth) {
         Wallet w = wallets.findById(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Wallet not found"));
         boolean admin = auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
         if (!admin && !w.getUser().getUsername().equals(auth.getName())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Not allowed to view this wallet");
+            throw new ApiException(HttpStatus.NOT_FOUND, "Wallet not found");
         }
         return WalletResponse.from(w);
     }

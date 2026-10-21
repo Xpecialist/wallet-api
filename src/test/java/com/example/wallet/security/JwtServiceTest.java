@@ -73,4 +73,11 @@ class JwtServiceTest {
         String weak = Base64.getEncoder().encodeToString("short".getBytes());
         assertThatThrownBy(() -> new JwtService(weak, 1000)).isInstanceOf(WeakKeyException.class);
     }
+
+    @Test
+    void missingOrBlankSecretIsRejectedAtConstructionWithAClearException() {
+        assertThatThrownBy(() -> new JwtService(null, 1000)).isInstanceOf(MissingJwtSecretException.class);
+        assertThatThrownBy(() -> new JwtService("", 1000)).isInstanceOf(MissingJwtSecretException.class);
+        assertThatThrownBy(() -> new JwtService("   ", 1000)).isInstanceOf(MissingJwtSecretException.class);
+    }
 }

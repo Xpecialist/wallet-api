@@ -7,12 +7,12 @@ import { TransactionTable } from '../components/TransactionTable.jsx';
 import { formatMoney } from '../utils/format.js';
 import { useFetch } from '../utils/useFetch.js';
 
-/** Balance, deposit/withdraw forms and the latest transactions. */
+/** Balance, withdraw form and the latest transactions. Money can only be added by an admin (admin deposit page). */
 export default function DashboardPage() {
   const { wallet, refreshWallet } = useAuth();
   const recent = useFetch(() => api.transactions({ size: 5, sort: 'createdAt,desc' }), []);
 
-  // Refresh balance and the recent list after a deposit or withdrawal.
+  // Refresh balance and the recent list after a withdrawal.
   const afterChange = () => {
     refreshWallet();
     recent.reload();
@@ -29,10 +29,7 @@ export default function DashboardPage() {
         <span className="muted">Wallet ID {wallet.id}</span>
       </section>
 
-      <div className="grid-2">
-        <AmountForm title="Deposit" submitText="Deposit" action={api.deposit} onDone={afterChange} />
-        <AmountForm title="Withdraw" submitText="Withdraw" action={api.withdraw} onDone={afterChange} />
-      </div>
+      <AmountForm title="Withdraw" submitText="Withdraw" action={api.withdraw} onDone={afterChange} />
 
       <section className="card">
         <div className="card-head">

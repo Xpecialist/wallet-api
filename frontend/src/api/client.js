@@ -89,7 +89,6 @@ export const api = {
   // wallets
   myWallet: () => request('GET', '/api/wallets/me'),
   wallet: (id) => request('GET', `/api/wallets/${encodeURIComponent(id)}`),
-  deposit: (amount, key) => request('POST', '/api/wallets/me/deposit', { body: { amount }, idempotencyKey: key }),
   withdraw: (amount, key) => request('POST', '/api/wallets/me/withdraw', { body: { amount }, idempotencyKey: key }),
 
   // transactions

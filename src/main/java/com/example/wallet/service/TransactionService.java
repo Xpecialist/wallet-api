@@ -16,6 +16,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
@@ -26,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** Money transfers between wallets, deposits and withdrawals, and transaction queries. */
 @Service
 public class TransactionService {
+    private static final int MAX_KEY_LENGTH = 100;
     private final TransactionRepository transactions;
     private final WalletRepository wallets;
 
@@ -43,11 +45,12 @@ public class TransactionService {
     /**
      * Transfers funds from the caller's wallet to another wallet, all in one database transaction.
      * <ol>
-     *   <li>Idempotency: if a non-blank key is given and a transaction with that key already exists, that
-     *       transaction is returned unchanged when it was made by the same sender wallet (no new transfer); a
-     *       key belonging to another sender yields 409. A blank key is treated as no key.</li>
      *   <li>The receiver is resolved from {@code receiverWalletId} if present, otherwise from
-     *       {@code receiverUsername}. Transferring to oneself is rejected.</li>
+     *       {@code receiverUsername} (trimmed, case-insensitive). Transferring to oneself is rejected.</li>
+     *   <li>Idempotency: keys are scoped to the sender wallet. If the sender already used the key, the original
+     *       transaction is returned unchanged (no new transfer) when this request has the same receiver, amount and
+     *       note; the same key with a different request, or for a different operation type, yields 409. A blank
+     *       or over-long key is rejected with 400.</li>
      *   <li>Locking: both wallet rows are locked with {@code SELECT ... FOR UPDATE}, always in ascending id
      *       order so that two opposite transfers between the same wallets cannot deadlock.</li>
      *   <li>Checks, in order: same currency, then sufficient balance ({@code balance >= amount}).</li>
@@ -62,38 +65,39 @@ public class TransactionService {
      * @param req            the transfer details
      * @param idempotencyKey optional client-supplied key from the {@code Idempotency-Key} header, may be null
      * @return the created transaction, or the existing one for a repeated idempotency key
-     * @throws ApiException 400 if no receiver is given, the receiver is the sender, or currencies differ;
-     *         404 if a wallet or the receiver username is not found; 409 if the idempotency key belongs to
-     *         another sender; 422 if funds are insufficient
+     * @throws ApiException 400 if no receiver is given, the receiver is the sender, currencies differ, or the key is
+     *         blank/over 100 characters; 404 if a wallet or the receiver username is not found; 409 if the
+     *         idempotency key was already used by this sender for a different request; 422 if funds are insufficient
      */
     @Transactional
     public TransactionResponse transfer(String senderUsername, TransferRequest req, String idempotencyKey) {
+        String key = normalizeKey(idempotencyKey);
         Wallet senderRef = wallets.findByUserUsername(senderUsername)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Sender wallet not found"));
-
-        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            var existing = transactions.findByIdempotencyKey(idempotencyKey);
-            if (existing.isPresent()) {
-                if (!senderRef.getId().equals(existing.get().getSenderWalletId())) {
-                    throw new ApiException(HttpStatus.CONFLICT, "Idempotency key already used");
-                }
-                return TransactionResponse.from(existing.get());
-            }
-        } else {
-            idempotencyKey = null;
-        }
 
         Long receiverId;
         if (req.receiverWalletId() != null) {
             receiverId = req.receiverWalletId();
         } else if (req.receiverUsername() != null && !req.receiverUsername().isBlank()) {
-            receiverId = wallets.findByUserUsername(req.receiverUsername())
+            receiverId = wallets.findByUserUsername(req.receiverUsername().trim())
                     .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Receiver not found")).getId();
         } else {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Provide receiverUsername or receiverWalletId");
         }
         if (receiverId.equals(senderRef.getId())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Cannot transfer to yourself");
+        }
+
+        if (key != null) {
+            var existing = transactions.findByOwnerAndKey(senderRef.getId(), key);
+            if (existing.isPresent()) {
+                Transaction e = existing.get();
+                if (e.getType() != TransactionType.TRANSFER || !receiverId.equals(e.getReceiverWalletId())
+                        || e.getAmount().compareTo(req.amount()) != 0 || !Objects.equals(e.getNote(), req.note())) {
+                    throw keyReuse();
+                }
+                return TransactionResponse.from(e);
+            }
         }
 
         // Lock both wallets in id order to avoid deadlocks.
@@ -124,7 +128,7 @@ public class TransactionService {
         t.setType(TransactionType.TRANSFER);
         t.setNote(req.note());
         t.setStatus(TransactionStatus.COMPLETED);
-        t.setIdempotencyKey(idempotencyKey);
+        t.setIdempotencyKey(key);
         return TransactionResponse.from(transactions.save(t));
     }
 
@@ -132,23 +136,25 @@ public class TransactionService {
      * Credits a wallet with money from outside the system (simulated; no payment provider is involved) and records a
      * {@code DEPOSIT} transaction, in one database transaction. The wallet row is locked with
      * {@code SELECT ... FOR UPDATE} while the balance is updated. If a non-blank idempotency key is given and a
-     * deposit to the same wallet already exists with that key, that transaction is returned and nothing is credited.
+     * deposit of the same amount to the same wallet already exists with that key (keys are scoped to the wallet), that
+     * transaction is returned and nothing is credited. Only reachable through the admin endpoint.
      *
      * @param walletId       the wallet to credit
      * @param amount         the amount to credit
      * @param idempotencyKey optional client-supplied key, may be null
      * @return the created transaction, or the existing one for a repeated idempotency key
-     * @throws ApiException 404 if the wallet is not found; 409 if the key was used for a different operation
+     * @throws ApiException 400 if the key is blank or over 100 characters; 404 if the wallet is not found; 409 if
+     *         the wallet already used the key for a different amount or operation
      */
     @Transactional
     public TransactionResponse deposit(Long walletId, BigDecimal amount, String idempotencyKey) {
         String key = normalizeKey(idempotencyKey);
         if (key != null) {
-            var existing = transactions.findByIdempotencyKey(key);
+            var existing = transactions.findByOwnerAndKey(walletId, key);
             if (existing.isPresent()) {
                 Transaction e = existing.get();
-                if (e.getType() != TransactionType.DEPOSIT || !walletId.equals(e.getReceiverWalletId())) {
-                    throw new ApiException(HttpStatus.CONFLICT, "Idempotency key already used");
+                if (e.getType() != TransactionType.DEPOSIT || e.getAmount().compareTo(amount) != 0) {
+                    throw keyReuse();
                 }
                 return TransactionResponse.from(e);
             }
@@ -167,43 +173,29 @@ public class TransactionService {
     }
 
     /**
-     * Deposits into the wallet owned by the given user.
-     *
-     * @param username       the wallet owner
-     * @param amount         the amount to credit
-     * @param idempotencyKey optional client-supplied key, may be null
-     * @return the created (or existing) transaction
-     * @throws ApiException 404 if the user has no wallet; otherwise as for {@link #deposit}
-     */
-    @Transactional
-    public TransactionResponse depositToOwn(String username, BigDecimal amount, String idempotencyKey) {
-        return deposit(ownWalletId(username), amount, idempotencyKey);
-    }
-
-    /**
      * Withdraws money from the wallet owned by the given user to outside the system (simulated) and records a
      * {@code WITHDRAWAL} transaction, in one database transaction. The wallet row is locked with
      * {@code SELECT ... FOR UPDATE}; the balance must be at least the amount. If a non-blank idempotency key is given
-     * and a withdrawal from the same wallet already exists with that key, that transaction is returned and nothing
-     * is debited.
+     * and a withdrawal of the same amount from the same wallet already exists with that key, that transaction is
+     * returned and nothing is debited.
      *
      * @param username       the wallet owner
      * @param amount         the amount to debit
      * @param idempotencyKey optional client-supplied key, may be null
      * @return the created transaction, or the existing one for a repeated idempotency key
-     * @throws ApiException 404 if the user has no wallet; 409 if the key was used for a different operation;
-     *         422 if funds are insufficient
+     * @throws ApiException 400 if the key is blank or over 100 characters; 404 if the user has no wallet; 409 if the
+     *         wallet already used the key for a different amount or operation; 422 if funds are insufficient
      */
     @Transactional
     public TransactionResponse withdraw(String username, BigDecimal amount, String idempotencyKey) {
-        Long walletId = ownWalletId(username);
         String key = normalizeKey(idempotencyKey);
+        Long walletId = ownWalletId(username);
         if (key != null) {
-            var existing = transactions.findByIdempotencyKey(key);
+            var existing = transactions.findByOwnerAndKey(walletId, key);
             if (existing.isPresent()) {
                 Transaction e = existing.get();
-                if (e.getType() != TransactionType.WITHDRAWAL || !walletId.equals(e.getSenderWalletId())) {
-                    throw new ApiException(HttpStatus.CONFLICT, "Idempotency key already used");
+                if (e.getType() != TransactionType.WITHDRAWAL || e.getAmount().compareTo(amount) != 0) {
+                    throw keyReuse();
                 }
                 return TransactionResponse.from(e);
             }
@@ -237,13 +229,25 @@ public class TransactionService {
     }
 
     /**
-     * Treats a null or blank idempotency key as "no key".
+     * Validates the {@code Idempotency-Key} header value. An absent header means "no key".
      *
      * @param key the key from the request header, may be null
-     * @return the key, or {@code null} if it is null or blank
+     * @return the key, or {@code null} if no header was sent
+     * @throws ApiException 400 if the key is blank or longer than 100 characters (the column size)
      */
     private String normalizeKey(String key) {
-        return key == null || key.isBlank() ? null : key;
+        if (key == null) return null;
+        if (key.isBlank()) throw new ApiException(HttpStatus.BAD_REQUEST, "Idempotency-Key must not be blank");
+        if (key.length() > MAX_KEY_LENGTH) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "Idempotency-Key must be at most " + MAX_KEY_LENGTH + " characters");
+        }
+        return key;
+    }
+
+    /** @return the 409 for a key that this owner already used with a different request */
+    private static ApiException keyReuse() {
+        return new ApiException(HttpStatus.CONFLICT, "Idempotency key already used with a different request");
     }
 
     /**
@@ -253,10 +257,11 @@ public class TransactionService {
      * @param filter   optional filters
      * @param pageable page number, size and sort
      * @return one page of transactions
-     * @throws ApiException 404 if the user has no wallet
+     * @throws ApiException 404 if the user has no wallet; 400 if a sort property is not allowed
      */
     @Transactional(readOnly = true)
     public PageResponse<TransactionResponse> history(String username, TransactionFilter filter, Pageable pageable) {
+        SortWhitelist.check(pageable, SortWhitelist.TRANSACTIONS);
         Wallet w = wallets.findByUserUsername(username)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Wallet not found"));
         return PageResponse.from(transactions.findAll(spec(filter, w.getId()), pageable)
@@ -269,8 +274,8 @@ public class TransactionService {
      * @param id   the transaction id
      * @param auth the authenticated caller
      * @return the transaction
-     * @throws ApiException 404 if the transaction does not exist (or a non-admin caller has no wallet); 403 if
-     *         the caller is not a participant and not an admin
+     * @throws ApiException 404 if the transaction does not exist, a non-admin caller has no wallet, or the caller is
+     *         not a participant and not an admin (indistinguishable, so ids cannot be probed)
      */
     @Transactional(readOnly = true)
     public TransactionResponse getById(Long id, Authentication auth) {
@@ -281,7 +286,7 @@ public class TransactionService {
             Wallet w = wallets.findByUserUsername(auth.getName())
                     .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Wallet not found"));
             if (!w.getId().equals(t.getSenderWalletId()) && !w.getId().equals(t.getReceiverWalletId())) {
-                throw new ApiException(HttpStatus.FORBIDDEN, "Not allowed to view this transaction");
+                throw new ApiException(HttpStatus.NOT_FOUND, "Transaction not found");
             }
         }
         return TransactionResponse.from(t);
@@ -293,9 +298,11 @@ public class TransactionService {
      * @param filter   optional filters
      * @param pageable page number, size and sort
      * @return one page of transactions
+     * @throws ApiException 400 if a sort property is not allowed
      */
     @Transactional(readOnly = true)
     public PageResponse<TransactionResponse> listAll(TransactionFilter filter, Pageable pageable) {
+        SortWhitelist.check(pageable, SortWhitelist.TRANSACTIONS);
         return PageResponse.from(transactions.findAll(spec(filter, null), pageable).map(TransactionResponse::from));
     }
 

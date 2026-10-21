@@ -53,10 +53,11 @@ public class UserService {
     @Transactional
     public UserResponse updateEmail(String username, UpdateProfileRequest req) {
         User u = find(username);
-        if (!req.email().equalsIgnoreCase(u.getEmail()) && users.existsByEmail(req.email())) {
+        String email = req.email().trim();
+        if (!email.equalsIgnoreCase(u.getEmail()) && users.existsByEmail(email)) {
             throw new ApiException(HttpStatus.CONFLICT, "Email already registered");
         }
-        u.setEmail(req.email());
+        u.setEmail(email);
         return UserResponse.from(users.save(u));
     }
 
@@ -66,13 +67,17 @@ public class UserService {
      *
      * @param username the username
      * @param req      the current and new passwords
-     * @throws ApiException 404 if the user does not exist; 400 if the current password is wrong
+     * @throws ApiException 404 if the user does not exist; 400 if the current password is wrong or the new password
+     *         is the same as the current one
      */
     @Transactional
     public void changePassword(String username, ChangePasswordRequest req) {
         User u = find(username);
         if (!encoder.matches(req.currentPassword(), u.getPasswordHash())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Current password is incorrect");
+        }
+        if (req.currentPassword().equals(req.newPassword())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "New password must be different from the current password");
         }
         u.setPasswordHash(encoder.encode(req.newPassword()));
         users.save(u);
@@ -83,9 +88,11 @@ public class UserService {
      *
      * @param pageable page number, size and sort
      * @return one page of users
+     * @throws ApiException 400 if the sort property is not one of id, username, email, role, enabled, createdAt
      */
     @Transactional(readOnly = true)
     public PageResponse<UserResponse> listAll(Pageable pageable) {
+        SortWhitelist.check(pageable, SortWhitelist.USERS);
         return PageResponse.from(users.findAll(pageable).map(UserResponse::from));
     }
 

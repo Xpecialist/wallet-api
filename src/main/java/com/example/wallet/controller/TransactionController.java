@@ -30,9 +30,9 @@ public class TransactionController {
      * @param req            the transfer details
      * @param idempotencyKey optional {@code Idempotency-Key} header; repeating a key returns the original result
      * @param auth           the authenticated caller
-     * @return 201 with the transaction (errors: 400 invalid request, receiver is self, or currency mismatch;
-     *         401 not authenticated; 404 receiver or wallet not found; 409 idempotency key used by another
-     *         sender; 422 insufficient funds)
+     * @return 201 with the transaction (errors: 400 invalid request, bad Idempotency-Key, receiver is self, or currency mismatch;
+     *         401 not authenticated; 404 receiver or wallet not found; 409 idempotency key already used with a
+     *         different request; 422 insufficient funds)
      */
     @PostMapping("/transfer")
     public ResponseEntity<TransactionResponse> transfer(
@@ -67,8 +67,7 @@ public class TransactionController {
      *
      * @param id   the transaction id
      * @param auth the authenticated caller
-     * @return the transaction (errors: 401 if not authenticated, 403 if not a participant or admin,
-     *         404 if not found)
+     * @return the transaction (errors: 401 if not authenticated, 404 if not found or not a participant/admin)
      */
     @GetMapping("/{id}")
     public TransactionResponse byId(@PathVariable Long id, Authentication auth) { return service.getById(id, auth); }

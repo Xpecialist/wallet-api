@@ -104,7 +104,8 @@ abstract class ItBase {
 
     /** Creates an ADMIN directly through the service (the bootstrap only runs at startup) and logs in. */
     protected String adminToken() throws Exception {
-        authService.createUser("admin", "admin@example.com", PASSWORD, Role.ADMIN);
+        boolean exists = jdbc.queryForObject("select count(*) from users where username='admin'", Long.class) > 0;
+        if (!exists) authService.createUser("admin", "admin@example.com", PASSWORD, Role.ADMIN);
         return login("admin", PASSWORD);
     }
 
@@ -133,8 +134,11 @@ abstract class ItBase {
                 map("receiverUsername", toUsername, "amount", new BigDecimal(amount)), idemKey);
     }
 
-    protected MvcResult deposit(String token, String amount, String idemKey) throws Exception {
-        return postJson("/api/wallets/me/deposit", token, map("amount", new BigDecimal(amount)), idemKey);
+    /** Money enters only through the admin deposit endpoint; credits the wallet of {@code username}. */
+    protected MvcResult adminDeposit(String adminToken, String username, String amount, String idemKey)
+            throws Exception {
+        return postJson("/api/admin/wallets/" + walletId(username) + "/deposit", adminToken,
+                map("amount", new BigDecimal(amount)), idemKey);
     }
 
     protected MvcResult withdraw(String token, String amount, String idemKey) throws Exception {

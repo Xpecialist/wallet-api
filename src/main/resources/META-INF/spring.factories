@@ -1,0 +1,1 @@
+org.springframework.boot.diagnostics.FailureAnalyzer=com.example.wallet.security.MissingJwtSecretFailureAnalyzer

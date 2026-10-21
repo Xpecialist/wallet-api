@@ -11,7 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
-/** Authenticated endpoints under {@code /api/wallets} for viewing wallets, deposits and withdrawals. */
+/** Authenticated endpoints under {@code /api/wallets} for viewing wallets and withdrawing. There is no self-service deposit. */
 @RestController
 @RequestMapping("/api/wallets")
 public class WalletController {
@@ -22,29 +22,11 @@ public class WalletController {
      * Creates the controller.
      *
      * @param walletService      the wallet service
-     * @param transactionService the transaction service, used for deposits and withdrawals
+     * @param transactionService the transaction service, used for withdrawals
      */
     public WalletController(WalletService walletService, TransactionService transactionService) {
         this.walletService = walletService;
         this.transactionService = transactionService;
-    }
-
-    /**
-     * {@code POST /api/wallets/me/deposit}. Any authenticated user. Tops up the caller's own wallet (simulated).
-     *
-     * @param req            the amount
-     * @param idempotencyKey optional {@code Idempotency-Key} header; repeating a key returns the original result
-     * @param auth           the authenticated caller
-     * @return 201 with the DEPOSIT transaction (errors: 400 invalid amount, 401 not authenticated,
-     *         404 no wallet, 409 idempotency key used for a different operation)
-     */
-    @PostMapping("/me/deposit")
-    public ResponseEntity<TransactionResponse> deposit(
-            @Valid @RequestBody AmountRequest req,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            Authentication auth) {
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(transactionService.depositToOwn(auth.getName(), req.amount(), idempotencyKey));
     }
 
     /**
@@ -55,7 +37,7 @@ public class WalletController {
      * @param idempotencyKey optional {@code Idempotency-Key} header; repeating a key returns the original result
      * @param auth           the authenticated caller
      * @return 201 with the WITHDRAWAL transaction (errors: 400 invalid amount, 401 not authenticated,
-     *         404 no wallet, 409 idempotency key used for a different operation, 422 insufficient funds)
+     *         404 no wallet, 409 idempotency key already used with a different request, 422 insufficient funds)
      */
     @PostMapping("/me/withdraw")
     public ResponseEntity<TransactionResponse> withdraw(
@@ -80,7 +62,7 @@ public class WalletController {
      *
      * @param id   the wallet id
      * @param auth the authenticated caller
-     * @return the wallet (errors: 401 if not authenticated, 403 if not owner or admin, 404 if not found)
+     * @return the wallet (errors: 401 if not authenticated, 404 if not found or not owner/admin)
      */
     @GetMapping("/{id}")
     public WalletResponse byId(@PathVariable Long id, Authentication auth) { return walletService.getById(id, auth); }

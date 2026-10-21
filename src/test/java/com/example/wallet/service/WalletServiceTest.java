@@ -47,11 +47,11 @@ class WalletServiceTest {
     }
 
     @Test
-    void getByIdAllowsOwnerAndAdminButNotOthers() {
+    void getByIdAllowsOwnerAndAdminAndHidesOthersAs404() {
         assertThat(service.getById(1L, new TestingAuthenticationToken("alice", "x", "ROLE_USER"))).isNotNull();
         assertThat(service.getById(1L, new TestingAuthenticationToken("root", "x", "ROLE_ADMIN"))).isNotNull();
         assertThatThrownBy(() -> service.getById(1L, new TestingAuthenticationToken("bob", "x", "ROLE_USER")))
-                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
     @Test

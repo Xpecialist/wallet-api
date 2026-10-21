@@ -59,18 +59,20 @@ describe('api client', () => {
     expect(await api.updateEmail('a@b.co')).toBeNull();
   });
 
-  it('sends the Idempotency-Key header on deposit, withdraw, transfer and admin deposit', async () => {
+  it('sends the Idempotency-Key header on withdraw, transfer and admin deposit', async () => {
     f = mockFetch({
-      'POST /api/wallets/me/deposit': res(200, {}),
       'POST /api/wallets/me/withdraw': res(200, {}),
       'POST /api/transactions/transfer': res(200, {}),
       'POST /api/admin/wallets/5/deposit': res(200, {}),
     });
-    await api.deposit('1', 'k1');
-    await api.withdraw('1', 'k2');
-    await api.transfer({ amount: '1' }, 'k3');
-    await api.adminDeposit(5, '1', 'k4');
-    expect(f.calls.map((c) => c.init.headers['Idempotency-Key'])).toEqual(['k1', 'k2', 'k3', 'k4']);
+    await api.withdraw('1', 'k1');
+    await api.transfer({ amount: '1' }, 'k2');
+    await api.adminDeposit(5, '1', 'k3');
+    expect(f.calls.map((c) => c.init.headers['Idempotency-Key'])).toEqual(['k1', 'k2', 'k3']);
+  });
+
+  it('has no self-service deposit call any more', () => {
+    expect(api.deposit).toBeUndefined();
   });
 
   it('omits the Idempotency-Key header when none is given', async () => {

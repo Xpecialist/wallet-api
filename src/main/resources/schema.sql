@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS wallets (
 );
 
 -- A deposit has no sender wallet and a withdrawal has no receiver wallet, so both ids are nullable.
+-- idempotency_key is unique per owning wallet, see uq_tx_owner_idempotency below (not globally).
 CREATE TABLE IF NOT EXISTS transactions (
     id                 BIGSERIAL PRIMARY KEY,
     sender_wallet_id   BIGINT         REFERENCES wallets(id),
@@ -26,7 +27,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     status             VARCHAR(20)    NOT NULL,
     note               VARCHAR(255),
     created_at         TIMESTAMP      NOT NULL DEFAULT NOW(),
-    idempotency_key    VARCHAR(100)   UNIQUE
+    idempotency_key    VARCHAR(100)
 );
 
 -- Upgrades for databases created by earlier versions of this script (safe to run repeatedly).
@@ -44,3 +45,43 @@ ALTER TABLE transactions ADD CONSTRAINT chk_tx_type_wallets CHECK (
 CREATE INDEX IF NOT EXISTS idx_tx_sender     ON transactions(sender_wallet_id);
 CREATE INDEX IF NOT EXISTS idx_tx_receiver   ON transactions(receiver_wallet_id);
 CREATE INDEX IF NOT EXISTS idx_tx_created_at ON transactions(created_at);
+
+-- Idempotency keys are scoped per owning wallet: the sender for transfers and withdrawals, the receiver for deposits.
+-- The new index is created first, then the old global UNIQUE constraint (auto-named, on this column only) is dropped,
+-- so uniqueness is never missing. Old data satisfied the stricter global rule, so the index build cannot fail.
+-- The DO bodies are single-quoted (quotes doubled) because Spring's script splitter does not understand $$ blocks.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tx_owner_idempotency
+    ON transactions (COALESCE(sender_wallet_id, receiver_wallet_id), idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
+DO '
+DECLARE c text;
+BEGIN
+    FOR c IN SELECT con.conname FROM pg_constraint con
+             JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)
+             WHERE con.conrelid = ''transactions''::regclass AND con.contype = ''u''
+               AND cardinality(con.conkey) = 1 AND a.attname = ''idempotency_key''
+    LOOP
+        EXECUTE format(''ALTER TABLE transactions DROP CONSTRAINT %I'', c);
+    END LOOP;
+END';
+
+-- Usernames and emails are unique ignoring case and surrounding whitespace. The check and the trim run only while the
+-- index does not exist yet; if existing rows collide, startup stops with a message instead of dropping anything.
+DO '
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = ''uq_users_username_lower'') THEN
+        IF EXISTS (SELECT 1 FROM users GROUP BY lower(btrim(username)) HAVING count(*) > 1) THEN
+            RAISE EXCEPTION ''Schema upgrade aborted: several users have the same username ignoring case/whitespace. Rename or remove them first. Find them with: SELECT lower(btrim(username)), count(*) FROM users GROUP BY 1 HAVING count(*) > 1'';
+        END IF;
+        UPDATE users SET username = btrim(username) WHERE username <> btrim(username);
+        CREATE UNIQUE INDEX uq_users_username_lower ON users (lower(username));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = ''uq_users_email_lower'') THEN
+        IF EXISTS (SELECT 1 FROM users GROUP BY lower(btrim(email)) HAVING count(*) > 1) THEN
+            RAISE EXCEPTION ''Schema upgrade aborted: several users have the same email ignoring case/whitespace. Change or remove them first. Find them with: SELECT lower(btrim(email)), count(*) FROM users GROUP BY 1 HAVING count(*) > 1'';
+        END IF;
+        UPDATE users SET email = btrim(email) WHERE email <> btrim(email);
+        CREATE UNIQUE INDEX uq_users_email_lower ON users (lower(email));
+    END IF;
+END';

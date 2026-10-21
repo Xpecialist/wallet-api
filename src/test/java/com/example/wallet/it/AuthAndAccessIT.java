@@ -162,8 +162,14 @@ class AuthAndAccessIT extends ItBase {
         assertThat(r.getResponse().getStatus()).isEqualTo(200);
         assertThat(jdbc.queryForObject("select enabled from users where id=?", Boolean.class, bobId)).isFalse();
 
-        assertThat(postJson("/api/auth/login", null, map("username", "bob", "password", PASSWORD), null)
-                .getResponse().getStatus()).isEqualTo(403);
+        // a disabled account is indistinguishable from a wrong password: same status, same body
+        MvcResult disabledRight = postJson("/api/auth/login", null, map("username", "bob", "password", PASSWORD), null);
+        MvcResult disabledWrong = postJson("/api/auth/login", null, map("username", "bob", "password", "nope-nope-1"), null);
+        MvcResult unknown = postJson("/api/auth/login", null, map("username", "ghost", "password", PASSWORD), null);
+        for (MvcResult r2 : new MvcResult[] {disabledRight, disabledWrong, unknown}) {
+            assertThat(r2.getResponse().getStatus()).isEqualTo(401);
+            assertThat(body(r2).get("error").asText()).isEqualTo("Invalid username or password");
+        }
         assertThat(getJson("/api/wallets/me", token).getResponse().getStatus()).isEqualTo(401);
 
         assertThat(patchJson("/api/admin/users/" + bobId + "/status", admin, map("enabled", true))
@@ -238,7 +244,11 @@ class AuthAndAccessIT extends ItBase {
         long aliceW = walletId("alice");
         long bobW = walletId("bob");
         assertThat(getJson("/api/wallets/" + aliceW, alice).getResponse().getStatus()).isEqualTo(200);
-        assertThat(getJson("/api/wallets/" + bobW, alice).getResponse().getStatus()).isEqualTo(403);
+        // a wallet that exists but is not yours looks exactly like one that does not exist
+        MvcResult foreign = getJson("/api/wallets/" + bobW, alice);
+        MvcResult missing = getJson("/api/wallets/99999", alice);
+        assertThat(foreign.getResponse().getStatus()).isEqualTo(404);
+        assertThat(body(foreign).get("error").asText()).isEqualTo(body(missing).get("error").asText());
         assertThat(getJson("/api/wallets/" + bobW, admin).getResponse().getStatus()).isEqualTo(200);
         assertThat(getJson("/api/wallets/99999", alice).getResponse().getStatus()).isEqualTo(404);
     }
@@ -252,7 +262,10 @@ class AuthAndAccessIT extends ItBase {
         long id = body(transfer(alice, "bob", "10", null)).get("id").asLong();
         assertThat(getJson("/api/transactions/" + id, alice).getResponse().getStatus()).isEqualTo(200);
         assertThat(getJson("/api/transactions/" + id, bob).getResponse().getStatus()).isEqualTo(200);
-        assertThat(getJson("/api/transactions/" + id, carol).getResponse().getStatus()).isEqualTo(403);
+        MvcResult foreign = getJson("/api/transactions/" + id, carol);
+        MvcResult missing = getJson("/api/transactions/99999", carol);
+        assertThat(foreign.getResponse().getStatus()).isEqualTo(404);
+        assertThat(body(foreign).get("error").asText()).isEqualTo(body(missing).get("error").asText());
         assertThat(getJson("/api/transactions/" + id, admin).getResponse().getStatus()).isEqualTo(200);
         assertThat(getJson("/api/transactions/99999", alice).getResponse().getStatus()).isEqualTo(404);
     }

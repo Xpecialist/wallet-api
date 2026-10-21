@@ -20,8 +20,8 @@ class MoneyMovementIT extends ItBase {
 
     @Test
     void depositIncreasesBalanceAndPersistsDepositRow() throws Exception {
-        String t = register("alice");
-        MvcResult r = deposit(t, "50.25", null);
+        register("alice");
+        MvcResult r = adminDeposit(adminToken(), "alice", "50.25", null);
         assertThat(r.getResponse().getStatus()).isEqualTo(201);
         assertThat(body(r).get("type").asText()).isEqualTo("DEPOSIT");
         assertThat(body(r).get("status").asText()).isEqualTo("COMPLETED");
@@ -70,8 +70,9 @@ class MoneyMovementIT extends ItBase {
     void invalidAmountsAreRejectedWith400AndChangeNothing() throws Exception {
         String t = register("alice");
         register("bob");
+        String adm = adminToken();
         for (String amt : new String[] {"0", "-5", "0.00001", "1.23456"}) {
-            assertThat(deposit(t, amt, null).getResponse().getStatus()).as("deposit " + amt).isEqualTo(400);
+            assertThat(adminDeposit(adm, "alice", amt, null).getResponse().getStatus()).as("deposit " + amt).isEqualTo(400);
             assertThat(withdraw(t, amt, null).getResponse().getStatus()).as("withdraw " + amt).isEqualTo(400);
             assertThat(transfer(t, "bob", amt, null).getResponse().getStatus()).as("transfer " + amt).isEqualTo(400);
         }
@@ -135,7 +136,7 @@ class MoneyMovementIT extends ItBase {
         assertThat(balance("bob")).isEqualByComparingTo("100");
         assertThat(txCount()).isZero();
         // the failed attempt must not burn the idempotency key
-        assertThat(deposit(a, "10", null).getResponse().getStatus()).isEqualTo(201);
+        assertThat(adminDeposit(adminToken(), "alice", "10", null).getResponse().getStatus()).isEqualTo(201);
         assertThat(transfer(a, "bob", "100.01", "key-insufficient").getResponse().getStatus()).isEqualTo(201);
     }
 
@@ -207,52 +208,99 @@ class MoneyMovementIT extends ItBase {
         assertThat(first.getResponse().getStatus()).isEqualTo(201);
         assertThat(second.getResponse().getStatus()).isEqualTo(201);
         assertThat(body(second).get("id").asLong()).isEqualTo(body(first).get("id").asLong());
-        assertThat(body(second).get("idempotencyKey").asText()).isEqualTo("k-1");
+        assertThat(body(second).has("idempotencyKey")).as("the key is never echoed").isFalse();
         assertThat(balance("alice")).isEqualByComparingTo("90");
         assertThat(balance("bob")).isEqualByComparingTo("110");
         assertThat(txCount()).isEqualTo(1);
     }
 
     @Test
-    void sameKeyWithDifferentPayloadStillReturnsOriginalAndDoesNotMoveMoreMoney() throws Exception {
+    void sameKeyWithDifferentAmountReceiverOrNoteIs409AndDoesNotMoveMoreMoney() throws Exception {
         String a = register("alice");
         register("bob");
+        register("carol");
         MvcResult first = transfer(a, "bob", "10", "k-2");
-        MvcResult second = transfer(a, "bob", "99", "k-2");
-        assertThat(body(second).get("id").asLong()).isEqualTo(body(first).get("id").asLong());
-        assertThat(body(second).get("amount").decimalValue()).isEqualByComparingTo("10");
+        assertThat(first.getResponse().getStatus()).isEqualTo(201);
+
+        MvcResult amount = transfer(a, "bob", "99", "k-2");
+        assertThat(amount.getResponse().getStatus()).isEqualTo(409);
+        assertThat(body(amount).get("error").asText()).contains("different request");
+        assertThat(transfer(a, "carol", "10", "k-2").getResponse().getStatus()).as("other receiver").isEqualTo(409);
+        assertThat(postJson("/api/transactions/transfer", a,
+                map("receiverUsername", "bob", "amount", bd("10"), "note", "changed"), "k-2")
+                .getResponse().getStatus()).as("other note").isEqualTo(409);
         assertThat(balance("alice")).isEqualByComparingTo("90");
+        assertThat(balance("carol")).isEqualByComparingTo("100");
+        assertThat(txCount()).isEqualTo(1);
+        // the identical request is still a replay of the original
+        MvcResult same = transfer(a, "bob", "10", "k-2");
+        assertThat(same.getResponse().getStatus()).isEqualTo(201);
+        assertThat(body(same).get("id").asLong()).isEqualTo(body(first).get("id").asLong());
+    }
+
+    @Test
+    void replayByWalletIdAndByUsernameOfTheSameReceiverIsTheSameRequest() throws Exception {
+        String a = register("alice");
+        register("bob");
+        long first = body(transfer(a, "bob", "10", "k-3")).get("id").asLong();
+        MvcResult byId = postJson("/api/transactions/transfer", a,
+                map("receiverWalletId", walletId("bob"), "amount", bd("10.0000")), "k-3");
+        assertThat(byId.getResponse().getStatus()).isEqualTo(201);
+        assertThat(body(byId).get("id").asLong()).isEqualTo(first);
         assertThat(txCount()).isEqualTo(1);
     }
 
     @Test
-    void keyUsedByAnotherSenderIs409() throws Exception {
+    void sameKeyFromDifferentSendersIsIndependent() throws Exception {
         String a = register("alice");
         String b = register("bob");
         register("carol");
-        assertThat(transfer(a, "carol", "10", "shared").getResponse().getStatus()).isEqualTo(201);
-        assertThat(transfer(b, "carol", "10", "shared").getResponse().getStatus()).isEqualTo(409);
-        assertThat(balance("bob")).isEqualByComparingTo("100");
-        assertThat(txCount()).isEqualTo(1);
+        MvcResult ra = transfer(a, "carol", "10", "shared");
+        MvcResult rb = transfer(b, "carol", "10", "shared");
+        assertThat(ra.getResponse().getStatus()).isEqualTo(201);
+        assertThat(rb.getResponse().getStatus()).as("another users key must not block or leak").isEqualTo(201);
+        assertThat(body(rb).get("id").asLong()).isNotEqualTo(body(ra).get("id").asLong());
+        assertThat(balance("bob")).isEqualByComparingTo("90");
+        assertThat(txCount()).isEqualTo(2);
+        // each sender's own replay still returns their own transaction
+        assertThat(body(transfer(b, "carol", "10", "shared")).get("id").asLong()).isEqualTo(body(rb).get("id").asLong());
+        assertThat(txCount()).isEqualTo(2);
     }
 
     @Test
-    void blankKeyIsTreatedAsNoKeyAndStoredAsNull() throws Exception {
+    void receiverCannotSeeOrCollideWithTheSendersKey() throws Exception {
+        String a = register("alice");
+        String b = register("bob");
+        long id = body(transfer(a, "bob", "10", "alice-secret-key")).get("id").asLong();
+        MvcResult asReceiver = getJson("/api/transactions/" + id, b);
+        assertThat(asReceiver.getResponse().getStatus()).isEqualTo(200);
+        assertThat(asReceiver.getResponse().getContentAsString()).doesNotContain("alice-secret-key");
+        assertThat(body(asReceiver).has("idempotencyKey")).isFalse();
+        MvcResult list = getJson("/api/transactions", b);
+        assertThat(list.getResponse().getContentAsString()).doesNotContain("alice-secret-key");
+        // the receiver can use the same string for their own request
+        assertThat(transfer(b, "alice", "5", "alice-secret-key").getResponse().getStatus()).isEqualTo(201);
+        assertThat(txCount()).isEqualTo(2);
+    }
+
+    @Test
+    void blankIdempotencyKeyIs400ForEveryOperationAndNothingIsStored() throws Exception {
         String a = register("alice");
         register("bob");
-        assertThat(transfer(a, "bob", "1", "  ").getResponse().getStatus()).isEqualTo(201);
-        assertThat(transfer(a, "bob", "1", "  ").getResponse().getStatus()).isEqualTo(201);
-        assertThat(txCount()).isEqualTo(2);
-        assertThat(jdbc.queryForObject("select count(*) from transactions where idempotency_key is null", Long.class))
-                .isEqualTo(2);
-        assertThat(balance("alice")).isEqualByComparingTo("98");
+        String adm = adminToken();
+        assertThat(transfer(a, "bob", "1", "  ").getResponse().getStatus()).isEqualTo(400);
+        assertThat(withdraw(a, "1", "  ").getResponse().getStatus()).isEqualTo(400);
+        assertThat(adminDeposit(adm, "alice", "1", "  ").getResponse().getStatus()).isEqualTo(400);
+        assertThat(txCount()).isZero();
+        assertThat(balance("alice")).isEqualByComparingTo("100");
     }
 
     @Test
     void depositAndWithdrawIdempotencyReplayDoesNotDoubleApply() throws Exception {
         String t = register("alice");
-        MvcResult d1 = deposit(t, "20", "dep-1");
-        MvcResult d2 = deposit(t, "20", "dep-1");
+        String adm = adminToken();
+        MvcResult d1 = adminDeposit(adm, "alice", "20", "dep-1");
+        MvcResult d2 = adminDeposit(adm, "alice", "20", "dep-1");
         assertThat(body(d2).get("id").asLong()).isEqualTo(body(d1).get("id").asLong());
         assertThat(balance("alice")).isEqualByComparingTo("120");
 
@@ -261,13 +309,18 @@ class MoneyMovementIT extends ItBase {
         assertThat(body(w2).get("id").asLong()).isEqualTo(body(w1).get("id").asLong());
         assertThat(balance("alice")).isEqualByComparingTo("100");
         assertThat(txCount()).isEqualTo(2);
+        // same key, different amount: refused, nothing applied
+        assertThat(adminDeposit(adm, "alice", "21", "dep-1").getResponse().getStatus()).isEqualTo(409);
+        assertThat(withdraw(t, "21", "wd-1").getResponse().getStatus()).isEqualTo(409);
+        assertThat(balance("alice")).isEqualByComparingTo("100");
+        assertThat(txCount()).isEqualTo(2);
     }
 
     @Test
     void keyReusedForADifferentOperationTypeIs409() throws Exception {
         String t = register("alice");
         register("bob");
-        assertThat(deposit(t, "5", "op-key").getResponse().getStatus()).isEqualTo(201);
+        assertThat(adminDeposit(adminToken(), "alice", "5", "op-key").getResponse().getStatus()).isEqualTo(201);
         assertThat(withdraw(t, "5", "op-key").getResponse().getStatus()).isEqualTo(409);
         assertThat(balance("alice")).isEqualByComparingTo("105");
         // transfer replay with a key that belongs to a deposit by the same wallet: deposit has null sender, so conflict
@@ -277,12 +330,19 @@ class MoneyMovementIT extends ItBase {
     }
 
     @Test
-    void depositKeyOfAnotherWalletIs409() throws Exception {
-        String a = register("alice");
+    void depositKeysAreScopedPerWalletAndAWithdrawalReplayIsNeverReturnedAsATransfer() throws Exception {
+        register("alice");
         String b = register("bob");
-        assertThat(deposit(a, "5", "dk").getResponse().getStatus()).isEqualTo(201);
-        assertThat(deposit(b, "5", "dk").getResponse().getStatus()).isEqualTo(409);
+        String adm = adminToken();
+        assertThat(adminDeposit(adm, "alice", "5", "dk").getResponse().getStatus()).isEqualTo(201);
+        assertThat(adminDeposit(adm, "bob", "5", "dk").getResponse().getStatus()).isEqualTo(201);
+        assertThat(balance("bob")).isEqualByComparingTo("105");
+        // bob withdraws with key "wk"; replaying "wk" as a TRANSFER must be refused, not answered with the withdrawal
+        assertThat(withdraw(b, "5", "wk").getResponse().getStatus()).isEqualTo(201);
+        MvcResult asTransfer = transfer(b, "alice", "5", "wk");
+        assertThat(asTransfer.getResponse().getStatus()).isEqualTo(409);
         assertThat(balance("bob")).isEqualByComparingTo("100");
+        assertThat(balance("alice")).isEqualByComparingTo("105");
     }
 
     @Test
@@ -295,20 +355,27 @@ class MoneyMovementIT extends ItBase {
         assertThatThrownBy(() -> jdbc.update("insert into transactions(sender_wallet_id,receiver_wallet_id,amount,"
                 + "type,status,idempotency_key) values (?,?,1,'TRANSFER','COMPLETED','dup')", w1, w2))
                 .isInstanceOf(DataIntegrityViolationException.class);
+        // the same key under another owner is allowed (keys are unique per owning wallet, not globally)
+        jdbc.update("insert into transactions(sender_wallet_id,receiver_wallet_id,amount,type,status,idempotency_key) "
+                + "values (?,?,1,'TRANSFER','COMPLETED','dup')", w2, w1);
         // NULL keys may repeat
         jdbc.update("insert into transactions(sender_wallet_id,receiver_wallet_id,amount,type,status) "
                 + "values (?,?,1,'TRANSFER','COMPLETED')", w1, w2);
         jdbc.update("insert into transactions(sender_wallet_id,receiver_wallet_id,amount,type,status) "
                 + "values (?,?,1,'TRANSFER','COMPLETED')", w1, w2);
-        assertThat(txCount()).isEqualTo(3);
+        assertThat(txCount()).isEqualTo(4);
+        // and the old global UNIQUE constraint is gone
+        assertThat(jdbc.queryForObject("select count(*) from pg_constraint where conrelid='transactions'::regclass "
+                + "and contype='u'", Long.class)).isZero();
     }
 
     @Test
     void overlongIdempotencyKeyDoesNotCauseServerError() throws Exception {
         String a = register("alice");
         register("bob");
-        int status = transfer(a, "bob", "1", "k".repeat(101)).getResponse().getStatus();
-        assertThat(status).as("key longer than the VARCHAR(100) column").isBetween(400, 499);
+        MvcResult r = transfer(a, "bob", "1", "k".repeat(101));
+        assertThat(r.getResponse().getStatus()).as("key longer than the VARCHAR(100) column").isEqualTo(400);
+        assertThat(body(r).get("error").asText()).contains("Idempotency-Key");
         assertThat(balance("alice")).isEqualByComparingTo("100");
         assertThat(txCount()).isZero();
     }

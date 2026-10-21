@@ -1,6 +1,6 @@
 # wallet-api frontend
 
-A React (Vite, JavaScript) UI for the wallet API: login/register, dashboard with deposit and withdraw, transfers,
+A React (Vite, JavaScript) UI for the wallet API: login/register, dashboard with withdraw (money is added only by an admin), transfers,
 filterable history, profile, wallet lookup and an admin section (visible to the ADMIN role only).
 
 ## Prerequisites
@@ -51,5 +51,5 @@ src/
 - The JWT is kept in memory and in `sessionStorage` (cleared when the tab closes). Any 401 on an authenticated call
   clears it and sends you to the login page.
 - The role comes from `GET /api/users/me`; the login response only contains the token.
-- Each deposit, withdrawal, transfer and admin deposit submit sends a new `Idempotency-Key`.
+- Each withdrawal, transfer and admin deposit submit sends a new `Idempotency-Key`.
 - Amounts are shown with 2 to 4 decimals plus the currency of your wallet.

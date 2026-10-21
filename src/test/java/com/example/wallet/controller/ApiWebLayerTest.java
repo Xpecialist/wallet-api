@@ -80,7 +80,7 @@ class ApiWebLayerTest {
     private String bearer(String user) { return "Bearer " + jwt.generateToken(user); }
 
     private static TransactionResponse tx() {
-        return new TransactionResponse(1L, 1L, 2L, new BigDecimal("5"), "TRANSFER", "COMPLETED", null, null, null);
+        return new TransactionResponse(1L, 1L, 2L, new BigDecimal("5"), "TRANSFER", "COMPLETED", null, null);
     }
 
     private static final PageResponse<TransactionResponse> EMPTY_TX = new PageResponse<>(List.of(), 0, 20, 0, 0);
@@ -124,7 +124,7 @@ class ApiWebLayerTest {
     }
 
     @Test
-    void loginWithBadCredentialsIs401AndDisabledAccountIs403() throws Exception {
+    void loginWithBadCredentialsAndDisabledAccountBothGiveTheSame401() throws Exception {
         org.mockito.Mockito.doThrow(new BadCredentialsException("x")).when(authService).login(any());
         mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"username\":\"alice\",\"password\":\"pw\"}"))
@@ -133,7 +133,8 @@ class ApiWebLayerTest {
         org.mockito.Mockito.doThrow(new DisabledException("x")).when(authService).login(any());
         mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"username\":\"alice\",\"password\":\"pw\"}"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("Invalid username or password"));
     }
 
     @Test
@@ -246,19 +247,13 @@ class ApiWebLayerTest {
     }
 
     @Test
-    void walletDepositAndWithdrawUseCallerAndValidateAmount() throws Exception {
-        when(transactionService.depositToOwn(anyString(), any(), any())).thenReturn(tx());
+    void walletWithdrawUsesCallerAndValidatesAmount() throws Exception {
         when(transactionService.withdraw(anyString(), any(), any())).thenReturn(tx());
         String h = bearer("alice");
-        mvc.perform(post("/api/wallets/me/deposit").header("Authorization", h)
-                .contentType(MediaType.APPLICATION_JSON).content("{\"amount\":10}")).andExpect(status().isCreated());
         mvc.perform(post("/api/wallets/me/withdraw").header("Authorization", h)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"amount\":10}")).andExpect(status().isCreated());
-        verify(transactionService).depositToOwn(eq("alice"), eq(new BigDecimal("10")), any());
         verify(transactionService).withdraw(eq("alice"), eq(new BigDecimal("10")), any());
 
-        mvc.perform(post("/api/wallets/me/deposit").header("Authorization", h)
-                .contentType(MediaType.APPLICATION_JSON).content("{\"amount\":-1}")).andExpect(status().isBadRequest());
         mvc.perform(post("/api/wallets/me/withdraw").header("Authorization", h)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"amount\":0}")).andExpect(status().isBadRequest());
     }
@@ -311,18 +306,18 @@ class ApiWebLayerTest {
     @Test
     void invalidSortPropertyFromServiceMapsTo400() throws Exception {
         when(transactionService.history(anyString(), any(), any()))
-                .thenThrow(new org.springframework.dao.InvalidDataAccessApiUsageException("bad sort"));
+                .thenThrow(new ApiException(HttpStatus.BAD_REQUEST, "Invalid sort parameter"));
         mvc.perform(get("/api/transactions").header("Authorization", bearer("alice")).param("sort", "nope,asc"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Invalid sort parameter"));
     }
 
     @Test
-    void forbiddenTransactionViewMapsTo403() throws Exception {
+    void foreignTransactionViewMapsTo404() throws Exception {
         when(transactionService.getById(eq(9L), any()))
-                .thenThrow(new ApiException(HttpStatus.FORBIDDEN, "Not allowed to view this transaction"));
+                .thenThrow(new ApiException(HttpStatus.NOT_FOUND, "Transaction not found"));
         mvc.perform(get("/api/transactions/9").header("Authorization", bearer("alice")))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isNotFound());
     }
 
     // ---- profile ----
@@ -358,8 +353,41 @@ class ApiWebLayerTest {
     }
 
     @Test
-    void walletByIdForeignWalletMapsTo403() throws Exception {
-        when(walletService.getById(eq(5L), any())).thenThrow(new ApiException(HttpStatus.FORBIDDEN, "no"));
-        mvc.perform(get("/api/wallets/5").header("Authorization", bearer("alice"))).andExpect(status().isForbidden());
+    void walletByIdForeignWalletMapsTo404() throws Exception {
+        when(walletService.getById(eq(5L), any())).thenThrow(new ApiException(HttpStatus.NOT_FOUND, "Wallet not found"));
+        mvc.perform(get("/api/wallets/5").header("Authorization", bearer("alice"))).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void selfServiceDepositEndpointIsGone() throws Exception {
+        mvc.perform(post("/api/wallets/me/deposit").header("Authorization", bearer("alice"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"amount\":10}")).andExpect(status().isNotFound());
+        mvc.perform(post("/api/wallets/me/deposit").header("Authorization", bearer("root"))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"amount\":10}")).andExpect(status().isNotFound());
+        verify(transactionService, never()).deposit(any(), any(), any());
+    }
+
+    @Test
+    void transactionResponseDoesNotExposeTheIdempotencyKey() throws Exception {
+        when(transactionService.transfer(anyString(), any(), any())).thenReturn(tx());
+        mvc.perform(post("/api/transactions/transfer").header("Authorization", bearer("alice"))
+                        .header("Idempotency-Key", "secret-key").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"receiverUsername\":\"bob\",\"amount\":5}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.idempotencyKey").doesNotExist());
+    }
+
+    @Test
+    void passwordOver72BytesIsRejectedOnRegisterAndChangePassword() throws Exception {
+        String tooLong = "é".repeat(37); // 37 characters but 74 bytes
+        mvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"alice\",\"email\":\"a@b.co\",\"password\":\"" + tooLong + "\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/users/me/password").header("Authorization", bearer("alice"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"currentPassword\":\"old\",\"newPassword\":\"" + tooLong + "\"}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(authService);
+        verify(userService, never()).changePassword(any(), any());
     }
 }

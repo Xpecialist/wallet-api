@@ -1,16 +1,19 @@
 package com.example.wallet.exception;
 
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.data.mapping.PropertyReferenceException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.authentication.DisabledException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -21,6 +24,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     /**
      * Handles {@link ApiException}.
@@ -48,47 +52,56 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * Handles failed logins.
+     * Handles failed logins, including a disabled account. Disabled is deliberately the same response as a wrong
+     * password so a login cannot be used to find out which accounts exist or are disabled (Spring checks the enabled
+     * flag before the password).
      *
      * @param e the exception
      * @return a 401 response with a generic message that does not reveal whether the username exists
      */
-    @ExceptionHandler(BadCredentialsException.class)
-    public ResponseEntity<Map<String, Object>> badCreds(BadCredentialsException e) {
+    @ExceptionHandler({BadCredentialsException.class, DisabledException.class})
+    public ResponseEntity<Map<String, Object>> badCreds(AuthenticationException e) {
         return body(HttpStatus.UNAUTHORIZED, "Invalid username or password");
     }
 
     /**
-     * Handles login attempts by a disabled user.
-     *
-     * @param e the exception
-     * @return a 403 response
-     */
-    @ExceptionHandler(DisabledException.class)
-    public ResponseEntity<Map<String, Object>> disabled(DisabledException e) {
-        return body(HttpStatus.FORBIDDEN, "Account is disabled");
-    }
-
-    /**
-     * Handles an unknown sort property in a paged request.
+     * Handles an unknown sort property in a paged request. The services whitelist sortable properties first, so
+     * this is only a safety net; other {@code InvalidDataAccessApiUsageException}s are real server errors and are
+     * not mapped here.
      *
      * @param e the exception
      * @return a 400 response
      */
-    @ExceptionHandler({PropertyReferenceException.class, InvalidDataAccessApiUsageException.class})
-    public ResponseEntity<Map<String, Object>> badSort(Exception e) {
+    @ExceptionHandler(PropertyReferenceException.class)
+    public ResponseEntity<Map<String, Object>> badSort(PropertyReferenceException e) {
         return body(HttpStatus.BAD_REQUEST, "Invalid sort parameter");
     }
 
     /**
-     * Handles database constraint violations.
+     * Handles database constraint violations by SQLState. A unique violation (23505, e.g. a racing duplicate
+     * registration or a simultaneous idempotent replay) is a 409. Out-of-range or too-long values (22003, 22001)
+     * are a 400. Anything else (CHECK, foreign key, NOT NULL) indicates a bug, so it is logged and returned as 500
+     * instead of being disguised as a conflict.
      *
      * @param e the exception
-     * @return a 409 response with a generic message
+     * @return a 409, 400 or 500 response with a generic message
      */
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, Object>> integrity(DataIntegrityViolationException e) {
-        return body(HttpStatus.CONFLICT, "Data conflict");
+        String state = sqlState(e);
+        if (state == null || state.equals("23505")) return body(HttpStatus.CONFLICT, "Data conflict");
+        if (state.equals("22003") || state.equals("22001")) {
+            return body(HttpStatus.BAD_REQUEST, "Value out of range or too long");
+        }
+        log.error("Unexpected database constraint violation (SQLState {})", state, e);
+        return body(HttpStatus.INTERNAL_SERVER_ERROR, "Internal error");
+    }
+
+    private static String sqlState(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof SQLException s && s.getSQLState() != null) return s.getSQLState();
+        }
+        return null;
     }
 
     /**

@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +30,8 @@ public class AuthService {
     private final JwtService jwt;
     private final BigDecimal initialBalance;
     private final String currency;
+    private final String adminUsername;
+    private final String adminEmail;
 
     /**
      * Creates the service.
@@ -38,13 +41,17 @@ public class AuthService {
      * @param encoder        password encoder
      * @param authManager    authentication manager used for login
      * @param jwt            token service
-     * @param initialBalance balance given to every new wallet ({@code app.wallet.initial-balance})
+     * @param initialBalance balance given to every new wallet ({@code app.wallet.initial-balance}, default 0)
      * @param currency       currency of every new wallet ({@code app.wallet.currency})
+     * @param adminUsername  reserved admin username ({@code app.admin.username}); registration cannot take it
+     * @param adminEmail     reserved admin email ({@code app.admin.email}); registration cannot take it
      */
     public AuthService(UserRepository users, WalletRepository wallets, PasswordEncoder encoder,
                        AuthenticationManager authManager, JwtService jwt,
                        @Value("${app.wallet.initial-balance}") BigDecimal initialBalance,
-                       @Value("${app.wallet.currency}") String currency) {
+                       @Value("${app.wallet.currency}") String currency,
+                       @Value("${app.admin.username:}") String adminUsername,
+                       @Value("${app.admin.email:}") String adminEmail) {
         this.users = users;
         this.wallets = wallets;
         this.encoder = encoder;
@@ -52,37 +59,53 @@ public class AuthService {
         this.jwt = jwt;
         this.initialBalance = initialBalance;
         this.currency = currency;
+        this.adminUsername = adminUsername == null ? "" : adminUsername.trim();
+        this.adminEmail = adminEmail == null ? "" : adminEmail.trim();
     }
 
     /**
      * Registers a new user with role {@link Role#USER}, creates their wallet, and returns a token so the user is
-     * logged in immediately.
+     * logged in immediately. Username and email are trimmed; they are unique ignoring case.
      *
      * @param req the registration data
      * @return a response containing a JWT for the new user
-     * @throws ApiException 409 if the username or email is already in use
+     * @throws ApiException 400 if the trimmed username is not 3 to 50 characters; 409 if the username or email is
+     *         already in use or reserved for the admin
      */
     @Transactional
     public AuthResponse register(RegisterRequest req) {
-        createUser(req.username(), req.email(), req.password(), Role.USER);
-        return new AuthResponse(jwt.generateToken(req.username()));
+        String username = req.username().trim();
+        if (username.length() < 3 || username.length() > 50) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "username: size must be between 3 and 50");
+        }
+        User u = createUser(username, req.email(), req.password(), Role.USER);
+        return new AuthResponse(jwt.generateToken(u.getUsername()));
     }
 
     /**
      * Creates a user with a BCrypt-hashed password and a wallet holding the configured initial balance, in one
-     * transaction. Also used by {@link AdminBootstrap} to create the admin.
+     * transaction. Also used by {@link AdminBootstrap} to create the admin. Username and email are trimmed (the
+     * given casing is kept for display). A non-admin cannot take the reserved admin username or email.
      *
      * @param username the unique username
      * @param email    the unique email
      * @param password the raw password, hashed before storing
      * @param role     the role to assign
      * @return the saved user
-     * @throws ApiException 409 if the username or email is already in use
+     * @throws ApiException 409 if the username or email is already in use (ignoring case) or reserved
      */
     @Transactional
     public User createUser(String username, String email, String password, Role role) {
-        if (users.existsByUsername(username)) throw new ApiException(HttpStatus.CONFLICT, "Username already taken");
-        if (users.existsByEmail(email)) throw new ApiException(HttpStatus.CONFLICT, "Email already registered");
+        username = username.trim();
+        email = email.trim();
+        boolean reservedName = role != Role.ADMIN && username.equalsIgnoreCase(adminUsername);
+        boolean reservedMail = role != Role.ADMIN && email.equalsIgnoreCase(adminEmail);
+        if (reservedName || users.existsByUsername(username)) {
+            throw new ApiException(HttpStatus.CONFLICT, "Username already taken");
+        }
+        if (reservedMail || users.existsByEmail(email)) {
+            throw new ApiException(HttpStatus.CONFLICT, "Email already registered");
+        }
         User u = new User();
         u.setUsername(username);
         u.setEmail(email);
@@ -99,15 +122,17 @@ public class AuthService {
     }
 
     /**
-     * Verifies the credentials and issues a token.
+     * Verifies the credentials and issues a token. The username is trimmed and matched ignoring case; the token
+     * carries the stored username.
      *
      * @param req the login data
      * @return a response containing a JWT
-     * @throws org.springframework.security.core.AuthenticationException if the credentials are wrong (mapped to 401
-     *         by {@code GlobalExceptionHandler} for bad credentials)
+     * @throws org.springframework.security.core.AuthenticationException if the credentials are wrong or the account is
+     *         disabled (both mapped to the same 401 by {@code GlobalExceptionHandler})
      */
     public AuthResponse login(LoginRequest req) {
-        authManager.authenticate(new UsernamePasswordAuthenticationToken(req.username(), req.password()));
-        return new AuthResponse(jwt.generateToken(req.username()));
+        Authentication auth = authManager.authenticate(
+                new UsernamePasswordAuthenticationToken(req.username().trim(), req.password()));
+        return new AuthResponse(jwt.generateToken(auth.getName()));
     }
 }

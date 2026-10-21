@@ -155,3 +155,8 @@ Exact resolved dependency versions/CVEs; runtime behavior (date-filter 500, over
 1. Decide intent for H2 (is self-deposit a deliberate simulation?).
 2. Fix H1 (remove the default secret), M2 (disabled-login message), and the cheap mediums; re-run `mvn test` and `mvn verify`.
 3. Run `mvn dependency:tree` and a vulnerability scan to confirm M5.
+
+## Round 1 security fixes (2026-10-21): see SECURITY_FIXES_LOG.md
+User decisions: self-service deposit and the free 100 initial balance were NOT intentional (new accounts start at 0; money enters only through the admin deposit endpoint; a deposit-request-with-admin-approval feature is a LATER task).
+Fixed in round 1 (confirmed in code, tests added): H1, H2, M2, M3, M4 (the simultaneous-replay 409 stays OPEN), L1, L2, L3, L5, L6, L7.
+Not done: M1, M5, M6, M7, L4, L8-L11. Results: `mvn verify` 159 unit + 108 integration tests pass, frontend 187 tests pass, `npm run build` ok.

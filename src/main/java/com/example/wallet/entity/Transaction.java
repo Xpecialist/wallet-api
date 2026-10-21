@@ -7,7 +7,7 @@ import java.time.LocalDateTime;
 /**
  * A movement of funds, stored in the {@code transactions} table: a transfer between two wallets, a deposit into one
  * wallet, or a withdrawal from one wallet. Wallets are referenced by id only; the side outside the system is
- * {@code null}. The optional idempotency key is unique across all transactions.
+ * {@code null}. The optional idempotency key is unique per owning wallet (sender, or receiver for a deposit).
  */
 @Entity
 @Table(name = "transactions")
@@ -39,7 +39,7 @@ public class Transaction {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
-    @Column(name = "idempotency_key", unique = true, length = 100)
+    @Column(name = "idempotency_key", length = 100)
     private String idempotencyKey;
 
     /** JPA callback that sets {@code createdAt} to the current time before the first insert. */

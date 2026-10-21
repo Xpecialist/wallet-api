@@ -63,7 +63,7 @@ class TransactionServiceTest {
         when(wallets.findByIdForUpdate(1L)).thenReturn(Optional.of(alice));
         when(wallets.findByIdForUpdate(2L)).thenReturn(Optional.of(bob));
         when(transactions.save(any(Transaction.class))).thenAnswer(i -> i.getArgument(0));
-        when(transactions.findByIdempotencyKey(any())).thenReturn(Optional.empty());
+        when(transactions.findByOwnerAndKey(anyLong(), any())).thenReturn(Optional.empty());
     }
 
     private static TransferRequest toUser(String user, String amount) {
@@ -89,7 +89,6 @@ class TransactionServiceTest {
         assertThat(r.receiverWalletId()).isEqualTo(2L);
         assertThat(r.amount()).isEqualByComparingTo("30");
         assertThat(r.note()).isEqualTo("lunch");
-        assertThat(r.idempotencyKey()).isNull();
     }
 
     @Test
@@ -184,44 +183,109 @@ class TransactionServiceTest {
         assertThat(bob.getBalance()).isEqualByComparingTo("50");
     }
 
-    @Test
-    void transferWithRepeatedIdempotencyKeyFromSameSenderReturnsExistingWithoutMovingMoney() {
+    private Transaction existingTransfer(long sender, long receiver, String amount, String note) {
         Transaction existing = new Transaction();
-        existing.setSenderWalletId(1L);
-        existing.setReceiverWalletId(2L);
-        existing.setAmount(new BigDecimal("5"));
+        existing.setSenderWalletId(sender);
+        existing.setReceiverWalletId(receiver);
+        existing.setAmount(new BigDecimal(amount));
+        existing.setNote(note);
         existing.setType(TransactionType.TRANSFER);
         existing.setStatus(TransactionStatus.COMPLETED);
         existing.setIdempotencyKey("k1");
-        when(transactions.findByIdempotencyKey("k1")).thenReturn(Optional.of(existing));
+        return existing;
+    }
 
-        TransactionResponse r = service.transfer("alice", toUser("bob", "40"), "k1");
+    @Test
+    void transferWithRepeatedIdempotencyKeyAndSameRequestReturnsExistingWithoutMovingMoney() {
+        when(transactions.findByOwnerAndKey(1L, "k1")).thenReturn(Optional.of(existingTransfer(1, 2, "40.0000", "hi")));
 
-        assertThat(r.amount()).isEqualByComparingTo("5");
+        TransactionResponse r = service.transfer("alice",
+                new TransferRequest("bob", null, new BigDecimal("40"), "hi"), "k1");
+
+        assertThat(r.amount()).isEqualByComparingTo("40");
         assertThat(alice.getBalance()).isEqualByComparingTo("100");
         verify(transactions, never()).save(any());
     }
 
     @Test
-    void transferWithIdempotencyKeyOfAnotherSenderIs409() {
-        Transaction existing = new Transaction();
-        existing.setSenderWalletId(2L);
-        existing.setType(TransactionType.TRANSFER);
-        existing.setStatus(TransactionStatus.COMPLETED);
-        when(transactions.findByIdempotencyKey("k1")).thenReturn(Optional.of(existing));
+    void transferReplayByWalletIdMatchesTheSameReceiver() {
+        when(transactions.findByOwnerAndKey(1L, "k1")).thenReturn(Optional.of(existingTransfer(1, 2, "5", null)));
+        service.transfer("alice", new TransferRequest(null, 2L, new BigDecimal("5"), null), "k1");
+        verify(transactions, never()).save(any());
+    }
 
-        assertThatThrownBy(() -> service.transfer("alice", toUser("bob", "1"), "k1"))
+    @Test
+    void transferReplayWithDifferentAmountReceiverOrNoteIs409AndMovesNothing() {
+        when(transactions.findByOwnerAndKey(1L, "k1")).thenReturn(Optional.of(existingTransfer(1, 2, "5", "a")));
+        Wallet carol = TestData.wallet(3, TestData.user(30, "carol", Role.USER), "0", "USD");
+        when(wallets.findByUserUsername("carol")).thenReturn(Optional.of(carol));
+
+        assertThatThrownBy(() -> service.transfer("alice",
+                new TransferRequest("bob", null, new BigDecimal("6"), "a"), "k1"))
+                .satisfies(t -> assertStatus(t, HttpStatus.CONFLICT));
+        assertThatThrownBy(() -> service.transfer("alice",
+                new TransferRequest("carol", null, new BigDecimal("5"), "a"), "k1"))
+                .satisfies(t -> assertStatus(t, HttpStatus.CONFLICT));
+        assertThatThrownBy(() -> service.transfer("alice",
+                new TransferRequest("bob", null, new BigDecimal("5"), "b"), "k1"))
+                .satisfies(t -> assertStatus(t, HttpStatus.CONFLICT));
+        assertThatThrownBy(() -> service.transfer("alice",
+                new TransferRequest("bob", null, new BigDecimal("5"), null), "k1"))
+                .satisfies(t -> assertStatus(t, HttpStatus.CONFLICT));
+        assertThat(alice.getBalance()).isEqualByComparingTo("100");
+        verify(transactions, never()).save(any());
+    }
+
+    @Test
+    void transferReplayOfAWithdrawalWithTheSameKeyIs409NotReturnedAsTransfer() {
+        Transaction withdrawal = new Transaction();
+        withdrawal.setSenderWalletId(1L);
+        withdrawal.setAmount(new BigDecimal("5"));
+        withdrawal.setType(TransactionType.WITHDRAWAL);
+        withdrawal.setStatus(TransactionStatus.COMPLETED);
+        when(transactions.findByOwnerAndKey(1L, "k1")).thenReturn(Optional.of(withdrawal));
+
+        assertThatThrownBy(() -> service.transfer("alice", toUser("bob", "5"), "k1"))
                 .satisfies(t -> assertStatus(t, HttpStatus.CONFLICT));
     }
 
     @Test
-    void transferStoresNewIdempotencyKeyAndTreatsBlankAsNone() {
-        TransactionResponse withKey = service.transfer("alice", toUser("bob", "1"), "abc");
-        assertThat(withKey.idempotencyKey()).isEqualTo("abc");
+    void transferLooksTheKeyUpOnlyInTheSendersOwnScope() {
+        service.transfer("alice", toUser("bob", "1"), "shared");
+        verify(transactions).findByOwnerAndKey(1L, "shared");
+        verify(transactions, never()).findByOwnerAndKey(2L, "shared");
+    }
 
-        TransactionResponse blank = service.transfer("alice", toUser("bob", "1"), "   ");
-        assertThat(blank.idempotencyKey()).isNull();
-        verify(transactions, never()).findByIdempotencyKey("   ");
+    @Test
+    void transferTrimsReceiverUsername() {
+        service.transfer("alice", toUser("  bob  ", "1"), null);
+        assertThat(bob.getBalance()).isEqualByComparingTo("51");
+    }
+
+    @Test
+    void transferStoresNewIdempotencyKeyAndNoHeaderMeansNoKey() {
+        ArgumentCaptor<Transaction> cap = ArgumentCaptor.forClass(Transaction.class);
+        service.transfer("alice", toUser("bob", "1"), "abc");
+        service.transfer("alice", toUser("bob", "1"), null);
+        verify(transactions, Mockito.times(2)).save(cap.capture());
+        assertThat(cap.getAllValues().get(0).getIdempotencyKey()).isEqualTo("abc");
+        assertThat(cap.getAllValues().get(1).getIdempotencyKey()).isNull();
+    }
+
+    @Test
+    void blankOrOverlongIdempotencyKeyIs400ForEveryOperationAndChangesNothing() {
+        String tooLong = "k".repeat(101);
+        for (String bad : new String[] {"", "   ", tooLong}) {
+            assertThatThrownBy(() -> service.transfer("alice", toUser("bob", "1"), bad))
+                    .satisfies(t -> assertStatus(t, HttpStatus.BAD_REQUEST));
+            assertThatThrownBy(() -> service.deposit(1L, BigDecimal.ONE, bad))
+                    .satisfies(t -> assertStatus(t, HttpStatus.BAD_REQUEST));
+            assertThatThrownBy(() -> service.withdraw("alice", BigDecimal.ONE, bad))
+                    .satisfies(t -> assertStatus(t, HttpStatus.BAD_REQUEST));
+        }
+        verify(transactions, never()).save(any());
+        service.transfer("alice", toUser("bob", "1"), "k".repeat(100)); // exactly 100 is fine
+        assertThat(alice.getBalance()).isEqualByComparingTo("99");
     }
 
     // ---- deposit ----
@@ -245,13 +309,13 @@ class TransactionServiceTest {
     }
 
     @Test
-    void depositWithRepeatedKeyForSameWalletReturnsExistingAndDoesNotCredit() {
+    void depositWithRepeatedKeyAndSameAmountReturnsExistingAndDoesNotCredit() {
         Transaction existing = new Transaction();
         existing.setReceiverWalletId(1L);
-        existing.setAmount(new BigDecimal("7"));
+        existing.setAmount(new BigDecimal("50.0000"));
         existing.setType(TransactionType.DEPOSIT);
         existing.setStatus(TransactionStatus.COMPLETED);
-        when(transactions.findByIdempotencyKey("d1")).thenReturn(Optional.of(existing));
+        when(transactions.findByOwnerAndKey(1L, "d1")).thenReturn(Optional.of(existing));
 
         service.deposit(1L, new BigDecimal("50"), "d1");
         assertThat(alice.getBalance()).isEqualByComparingTo("100");
@@ -259,35 +323,35 @@ class TransactionServiceTest {
     }
 
     @Test
-    void depositWithKeyUsedByDifferentWalletOrTypeIs409() {
-        Transaction otherWallet = new Transaction();
-        otherWallet.setReceiverWalletId(2L);
-        otherWallet.setType(TransactionType.DEPOSIT);
-        otherWallet.setStatus(TransactionStatus.COMPLETED);
-        when(transactions.findByIdempotencyKey("d1")).thenReturn(Optional.of(otherWallet));
+    void depositWithKeyOfDifferentAmountOrTypeIs409() {
+        Transaction other = new Transaction();
+        other.setReceiverWalletId(1L);
+        other.setAmount(new BigDecimal("7"));
+        other.setType(TransactionType.DEPOSIT);
+        other.setStatus(TransactionStatus.COMPLETED);
+        when(transactions.findByOwnerAndKey(1L, "d1")).thenReturn(Optional.of(other));
         assertThatThrownBy(() -> service.deposit(1L, BigDecimal.ONE, "d1"))
                 .satisfies(t -> assertStatus(t, HttpStatus.CONFLICT));
 
         Transaction wrongType = new Transaction();
-        wrongType.setReceiverWalletId(1L);
+        wrongType.setSenderWalletId(1L);
+        wrongType.setReceiverWalletId(2L);
+        wrongType.setAmount(BigDecimal.ONE);
         wrongType.setType(TransactionType.TRANSFER);
         wrongType.setStatus(TransactionStatus.COMPLETED);
-        when(transactions.findByIdempotencyKey("d2")).thenReturn(Optional.of(wrongType));
+        when(transactions.findByOwnerAndKey(1L, "d2")).thenReturn(Optional.of(wrongType));
         assertThatThrownBy(() -> service.deposit(1L, BigDecimal.ONE, "d2"))
                 .satisfies(t -> assertStatus(t, HttpStatus.CONFLICT));
+        verify(transactions, never()).save(any());
     }
 
     @Test
-    void depositToOwnResolvesWalletOfUser() {
-        service.depositToOwn("bob", new BigDecimal("10"), null);
-        assertThat(bob.getBalance()).isEqualByComparingTo("60");
-    }
-
-    @Test
-    void depositToOwnForUserWithoutWalletIs404() {
-        when(wallets.findByUserUsername("ghost")).thenReturn(Optional.empty());
-        assertThatThrownBy(() -> service.depositToOwn("ghost", BigDecimal.ONE, null))
-                .satisfies(t -> assertStatus(t, HttpStatus.NOT_FOUND));
+    void depositKeysAreScopedPerWallet() {
+        service.deposit(1L, BigDecimal.ONE, "same");
+        service.deposit(2L, BigDecimal.ONE, "same");
+        verify(transactions).findByOwnerAndKey(1L, "same");
+        verify(transactions).findByOwnerAndKey(2L, "same");
+        verify(transactions, Mockito.times(2)).save(any());
     }
 
     // ---- withdraw ----
@@ -319,13 +383,13 @@ class TransactionServiceTest {
     }
 
     @Test
-    void withdrawWithRepeatedKeyReturnsExistingAndDoesNotDebit() {
+    void withdrawWithRepeatedKeyAndSameAmountReturnsExistingAndDoesNotDebit() {
         Transaction existing = new Transaction();
         existing.setSenderWalletId(1L);
-        existing.setAmount(new BigDecimal("3"));
+        existing.setAmount(new BigDecimal("50.0000"));
         existing.setType(TransactionType.WITHDRAWAL);
         existing.setStatus(TransactionStatus.COMPLETED);
-        when(transactions.findByIdempotencyKey("w1")).thenReturn(Optional.of(existing));
+        when(transactions.findByOwnerAndKey(1L, "w1")).thenReturn(Optional.of(existing));
 
         service.withdraw("alice", new BigDecimal("50"), "w1");
         assertThat(alice.getBalance()).isEqualByComparingTo("100");
@@ -333,14 +397,26 @@ class TransactionServiceTest {
     }
 
     @Test
-    void withdrawWithKeyUsedByOtherOperationIs409() {
+    void withdrawWithKeyOfDifferentAmountOrOperationIs409() {
         Transaction existing = new Transaction();
         existing.setSenderWalletId(1L);
+        existing.setReceiverWalletId(2L);
+        existing.setAmount(BigDecimal.ONE);
         existing.setType(TransactionType.TRANSFER);
         existing.setStatus(TransactionStatus.COMPLETED);
-        when(transactions.findByIdempotencyKey("w1")).thenReturn(Optional.of(existing));
+        when(transactions.findByOwnerAndKey(1L, "w1")).thenReturn(Optional.of(existing));
         assertThatThrownBy(() -> service.withdraw("alice", BigDecimal.ONE, "w1"))
                 .satisfies(t -> assertStatus(t, HttpStatus.CONFLICT));
+
+        Transaction diffAmount = new Transaction();
+        diffAmount.setSenderWalletId(1L);
+        diffAmount.setAmount(new BigDecimal("3"));
+        diffAmount.setType(TransactionType.WITHDRAWAL);
+        diffAmount.setStatus(TransactionStatus.COMPLETED);
+        when(transactions.findByOwnerAndKey(1L, "w2")).thenReturn(Optional.of(diffAmount));
+        assertThatThrownBy(() -> service.withdraw("alice", new BigDecimal("4"), "w2"))
+                .satisfies(t -> assertStatus(t, HttpStatus.CONFLICT));
+        assertThat(alice.getBalance()).isEqualByComparingTo("100");
     }
 
     // ---- history / getById / listAll ----
@@ -413,12 +489,12 @@ class TransactionServiceTest {
     }
 
     @Test
-    void getByIdForbiddenForNonParticipant() {
+    void getByIdOfForeignTransactionIs404NotForbidden() {
         Wallet carol = TestData.wallet(3, TestData.user(30, "carol", Role.USER), "0", "USD");
         when(wallets.findByUserUsername("carol")).thenReturn(Optional.of(carol));
         when(transactions.findById(5L)).thenReturn(Optional.of(between(1, 2)));
         assertThatThrownBy(() -> service.getById(5L, auth("carol", "ROLE_USER")))
-                .satisfies(t -> assertStatus(t, HttpStatus.FORBIDDEN));
+                .satisfies(t -> assertStatus(t, HttpStatus.NOT_FOUND));
     }
 
     @Test
@@ -433,5 +509,28 @@ class TransactionServiceTest {
         when(transactions.findById(anyLong())).thenReturn(Optional.empty());
         assertThatThrownBy(() -> service.getById(5L, auth("alice", "ROLE_USER")))
                 .satisfies(t -> assertStatus(t, HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    void historyAndListAllRejectSortPropertiesOutsideTheWhitelist() {
+        for (String bad : new String[] {"idempotencyKey", "note", "doesNotExist", "sender.id"}) {
+            Pageable p = PageRequest.of(0, 10, org.springframework.data.domain.Sort.by(bad));
+            assertThatThrownBy(() -> service.history("alice", emptyFilter(), p))
+                    .satisfies(t -> assertStatus(t, HttpStatus.BAD_REQUEST));
+            assertThatThrownBy(() -> service.listAll(emptyFilter(), p))
+                    .satisfies(t -> assertStatus(t, HttpStatus.BAD_REQUEST));
+        }
+        verify(transactions, never()).findAll(any(Specification.class), any(Pageable.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void historyAllowsEveryWhitelistedSortProperty() {
+        for (String ok : new String[] {"id", "createdAt", "amount", "type", "status", "senderWalletId", "receiverWalletId"}) {
+            Pageable p = PageRequest.of(0, 10, org.springframework.data.domain.Sort.by(ok));
+            when(transactions.findAll(any(Specification.class), any(Pageable.class)))
+                    .thenReturn(new PageImpl<Transaction>(List.of(), p, 0));
+            assertThat(service.history("alice", emptyFilter(), p).content()).isEmpty();
+        }
     }
 }

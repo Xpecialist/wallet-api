@@ -156,4 +156,41 @@ class UserServiceTest {
         assertThat(admin.isEnabled()).isTrue();
         assertThat(service.setEnabled(2L, true, "admin").enabled()).isTrue();
     }
+
+    @Test
+    void changePasswordRejectsNewPasswordEqualToCurrent() {
+        when(encoder.matches("samepassword", "hash-alice")).thenReturn(true);
+        assertThatThrownBy(() -> service.changePassword("alice",
+                new ChangePasswordRequest("samepassword", "samepassword")))
+                .satisfies(t -> assertStatus(t, HttpStatus.BAD_REQUEST));
+        assertThat(alice.getPasswordHash()).isEqualTo("hash-alice");
+        verify(users, never()).save(any());
+    }
+
+    @Test
+    void updateEmailTrimsBeforeCheckingAndStoring() {
+        when(users.findByUsername("alice")).thenReturn(Optional.of(alice));
+        when(users.existsByEmail("new@example.com")).thenReturn(false);
+        when(users.save(alice)).thenReturn(alice);
+        service.updateEmail("alice", new UpdateProfileRequest("  new@example.com "));
+        assertThat(alice.getEmail()).isEqualTo("new@example.com");
+    }
+
+    @Test
+    void listAllRejectsSortPropertiesOutsideTheWhitelist() {
+        for (String bad : new String[] {"passwordHash", "wallet", "doesNotExist", "password_hash"}) {
+            assertThatThrownBy(() -> service.listAll(PageRequest.of(0, 10, org.springframework.data.domain.Sort.by(bad))))
+                    .satisfies(t -> assertStatus(t, HttpStatus.BAD_REQUEST));
+        }
+        verify(users, never()).findAll(any(org.springframework.data.domain.Pageable.class));
+    }
+
+    @Test
+    void listAllAllowsEveryWhitelistedSortProperty() {
+        for (String ok : new String[] {"id", "username", "email", "role", "enabled", "createdAt"}) {
+            var pageable = PageRequest.of(0, 10, org.springframework.data.domain.Sort.by(ok));
+            when(users.findAll(pageable)).thenReturn(new PageImpl<>(List.of(), pageable, 0));
+            assertThat(service.listAll(pageable).content()).isEmpty();
+        }
+    }
 }

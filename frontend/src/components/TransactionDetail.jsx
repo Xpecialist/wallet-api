@@ -36,8 +36,6 @@ export function TransactionDetail({ id, walletId, currency, onClose }) {
           <dd>{formatDate(tx.createdAt)}</dd>
           <dt>Note</dt>
           <dd>{tx.note || '-'}</dd>
-          <dt>Idempotency key</dt>
-          <dd>{tx.idempotencyKey || '-'}</dd>
         </dl>
       )}
     </section>

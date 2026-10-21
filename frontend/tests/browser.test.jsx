@@ -236,7 +236,7 @@ describe('History page and transaction detail', () => {
     const f = mockFetch({
       ...authedHandlers(),
       'GET /api/transactions': res(200, page(TX)),
-      'GET /api/transactions/1': res(200, { ...TX[0], idempotencyKey: 'key-1' }),
+      'GET /api/transactions/1': res(200, { ...TX[0] }),
     });
     renderApp('/history', { token: 't' });
     await screen.findByText('lunch', { selector: 'td' });
@@ -249,8 +249,8 @@ describe('History page and transaction detail', () => {
     const user = userEvent.setup();
     await user.click(screen.getByText('lunch', { selector: 'td' }));
     expect(await screen.findByRole('heading', { name: 'Transaction #1' })).toBeInTheDocument();
-    expect(await screen.findByText('key-1')).toBeInTheDocument();
-    expect(screen.getByText('TRANSFER (sent)')).toBeInTheDocument();
+    expect(await screen.findByText('TRANSFER (sent)')).toBeInTheDocument();
+    expect(screen.queryByText('Idempotency key')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.queryByRole('heading', { name: 'Transaction #1' })).not.toBeInTheDocument();
   });

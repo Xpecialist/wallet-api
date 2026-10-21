@@ -143,9 +143,10 @@ class ConcurrencyIT extends ItBase {
     @Test
     void mixedParallelDepositsAndWithdrawalsLoseNoUpdates() throws Exception {
         String a = register("alice");
+        String adm = adminToken();
         List<Callable<MvcResult>> tasks = new ArrayList<>();
         for (int i = 0; i < 30; i++) {
-            tasks.add(() -> deposit(a, "5", null));
+            tasks.add(() -> adminDeposit(adm, "alice", "5", null));
             tasks.add(() -> withdraw(a, "2", null));
         }
         List<Integer> statuses = runParallel(tasks);
@@ -229,12 +230,13 @@ class ConcurrencyIT extends ItBase {
     void mixedParallelLoadKeepsMoneyInvariantsRegardlessOfIndividualRequestOutcome() throws Exception {
         String a = register("alice");
         String b = register("bob");
+        String adm = adminToken();
         List<Callable<MvcResult>> tasks = new ArrayList<>();
         for (int i = 0; i < 30; i++) {
             tasks.add(() -> transfer(a, "bob", "7", null));
             tasks.add(() -> transfer(b, "alice", "5", null));
             tasks.add(() -> withdraw(a, "3", null));
-            tasks.add(() -> deposit(b, "4", null));
+            tasks.add(() -> adminDeposit(adm, "bob", "4", null));
         }
         List<Integer> statuses = runParallel(tasks);
         System.err.println("INVARIANT TEST status histogram: " + statuses.stream()
@@ -246,9 +248,10 @@ class ConcurrencyIT extends ItBase {
 
     @Test
     void parallelDepositReplayWithSameKeyCreditsOnce() throws Exception {
-        String a = register("alice");
+        register("alice");
+        String adm = adminToken();
         List<Callable<MvcResult>> tasks = new ArrayList<>();
-        for (int i = 0; i < 10; i++) tasks.add(() -> deposit(a, "10", "dep-race"));
+        for (int i = 0; i < 10; i++) tasks.add(() -> adminDeposit(adm, "alice", "10", "dep-race"));
         List<Integer> statuses = runParallel(tasks);
         assertThat(statuses).allMatch(s -> s == 201 || s == 409, "no 5xx allowed: " + statuses);
         assertThat(txCount()).isEqualTo(1);

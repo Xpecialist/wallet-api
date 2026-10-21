@@ -35,7 +35,7 @@ class TransactionHistoryIT extends ItBase {
         admin = adminToken();
         transfer(alice, "bob", "10", null);
         transfer(bob, "alice", "20", null);
-        deposit(alice, "30", null);
+        adminDeposit(admin, "alice", "30", null);
         withdraw(alice, "40", null);
         transfer(carol, "bob", "5", null);
         transfer(bob, "alice", "50", null);
@@ -126,7 +126,7 @@ class TransactionHistoryIT extends ItBase {
      */
     @Test
     void defaultPageSizeIs20_userHistory() throws Exception {
-        for (int i = 0; i < 20; i++) deposit(alice, "1", null); // alice now has 25 transactions
+        for (int i = 0; i < 20; i++) adminDeposit(admin, "alice", "1", null); // alice now has 25 transactions
         JsonNode b = body(getJson("/api/transactions", alice));
         assertThat(b.get("totalElements").asLong()).isEqualTo(25);
         assertThat(b.get("size").asInt()).as("default page size (documented: 20)").isEqualTo(20);
@@ -136,7 +136,7 @@ class TransactionHistoryIT extends ItBase {
     /** Regression test (formerly KNOWN_BUG_..., same root cause), admin transactions list. */
     @Test
     void defaultPageSizeIs20_adminTransactions() throws Exception {
-        for (int i = 0; i < 20; i++) deposit(alice, "1", null); // 26 transactions in total
+        for (int i = 0; i < 20; i++) adminDeposit(admin, "alice", "1", null); // 26 transactions in total
         JsonNode b = body(getJson("/api/admin/transactions", admin));
         assertThat(b.get("size").asInt()).as("default page size (documented: 20)").isEqualTo(20);
         assertThat(b.get("content")).hasSize(20);
