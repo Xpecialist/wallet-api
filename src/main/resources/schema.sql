@@ -85,3 +85,32 @@ BEGIN
         CREATE UNIQUE INDEX uq_users_email_lower ON users (lower(email));
     END IF;
 END';
+
+-- Deposit requests: a user asks for money to be added; the wallet is credited only when an admin approves. Status and
+-- amount are checked in the database too, and an approved request must point at exactly one DEPOSIT transaction
+-- (unique, so a request or a transaction can never be linked twice). Idempotency keys are scoped per wallet.
+CREATE TABLE IF NOT EXISTS deposit_requests (
+    id              BIGSERIAL PRIMARY KEY,
+    wallet_id       BIGINT         NOT NULL REFERENCES wallets(id),
+    user_id         BIGINT         NOT NULL REFERENCES users(id),
+    amount          NUMERIC(19, 4) NOT NULL CHECK (amount > 0),
+    note            VARCHAR(255),
+    status          VARCHAR(20)    NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED')),
+    created_at      TIMESTAMP      NOT NULL DEFAULT NOW(),
+    decided_at      TIMESTAMP,
+    decided_by      BIGINT         REFERENCES users(id),
+    decision_note   VARCHAR(255),
+    transaction_id  BIGINT         REFERENCES transactions(id),
+    idempotency_key VARCHAR(100),
+    CONSTRAINT chk_dr_decision CHECK (
+        (status = 'PENDING'  AND decided_at IS NULL     AND decided_by IS NULL     AND transaction_id IS NULL) OR
+        (status = 'APPROVED' AND decided_at IS NOT NULL AND decided_by IS NOT NULL AND transaction_id IS NOT NULL) OR
+        (status = 'REJECTED' AND decided_at IS NOT NULL AND decided_by IS NOT NULL AND transaction_id IS NULL))
+);
+
+CREATE INDEX IF NOT EXISTS idx_dr_wallet ON deposit_requests(wallet_id);
+CREATE INDEX IF NOT EXISTS idx_dr_status ON deposit_requests(status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dr_wallet_idempotency
+    ON deposit_requests (wallet_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dr_transaction
+    ON deposit_requests (transaction_id) WHERE transaction_id IS NOT NULL;

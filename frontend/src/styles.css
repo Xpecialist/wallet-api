@@ -91,6 +91,11 @@ tr.clickable:hover { background: #f1f5f9; }
 .tag { padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.8rem; background: #e2e8f0; }
 .tag-sent, .tag-withdrawal { background: #fee2e2; color: #991b1b; }
 .tag-received, .tag-deposit { background: #dcfce7; color: #166534; }
+.tag-pending { background: #fef3c7; color: #92400e; }
+.tag-approved { background: #dcfce7; color: #166534; }
+.tag-rejected { background: #fee2e2; color: #991b1b; }
+.reject-box { border-top: 1px solid #e5e7eb; margin-top: 0.75rem; padding-top: 0.75rem; }
+.row-actions { display: flex; gap: 0.5rem; }
 
 .pagination { display: flex; gap: 1rem; align-items: center; justify-content: flex-end; margin-top: 0.75rem; }
 

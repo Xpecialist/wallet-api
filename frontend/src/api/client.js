@@ -96,6 +96,10 @@ export const api = {
   transactions: (params) => request('GET', '/api/transactions', { params }),
   transaction: (id) => request('GET', `/api/transactions/${id}`),
 
+  // deposit requests (money is only added once an admin approves)
+  depositRequests: (params) => request('GET', '/api/deposit-requests', { params }),
+  createDepositRequest: (body, key) => request('POST', '/api/deposit-requests', { body, idempotencyKey: key }),
+
   // profile
   me: () => request('GET', '/api/users/me'),
   updateEmail: (email) => request('PATCH', '/api/users/me', { body: { email } }),
@@ -106,6 +110,11 @@ export const api = {
   adminUsers: (params) => request('GET', '/api/admin/users', { params }),
   setUserEnabled: (id, enabled) => request('PATCH', `/api/admin/users/${id}/status`, { body: { enabled } }),
   adminTransactions: (params) => request('GET', '/api/admin/transactions', { params }),
+  adminDepositRequests: (params) => request('GET', '/api/admin/deposit-requests', { params }),
+  approveDepositRequest: (id, decisionNote) =>
+    request('POST', `/api/admin/deposit-requests/${id}/approve`, { body: decisionNote ? { decisionNote } : {} }),
+  rejectDepositRequest: (id, decisionNote) =>
+    request('POST', `/api/admin/deposit-requests/${id}/reject`, { body: { decisionNote } }),
   adminDeposit: (walletId, amount, key) =>
     request('POST', `/api/admin/wallets/${encodeURIComponent(walletId)}/deposit`, {
       body: { amount },

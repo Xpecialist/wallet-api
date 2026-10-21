@@ -1,6 +1,6 @@
 # wallet-api frontend
 
-A React (Vite, JavaScript) UI for the wallet API: login/register, dashboard with withdraw (money is added only by an admin), transfers,
+A React (Vite, JavaScript) UI for the wallet API: login/register, dashboard with withdraw, deposit requests (money is added only after an admin approves), transfers,
 filterable history, profile, wallet lookup and an admin section (visible to the ADMIN role only).
 
 ## Prerequisites
@@ -41,8 +41,8 @@ src/
   api/client.js        fetch wrapper: base URL, Bearer token, Idempotency-Key, error parsing, endpoint functions
   auth/AuthContext.jsx token, current user (with role) and wallet; sign in/out; 401 handling
   components/          Layout (nav bar, route guards), Fields, DataTable, Pagination, Feedback (Alert, Loading),
-                       AmountForm, TransactionTable/Detail/Browser
-  pages/               Auth, Dashboard, Transfer, History, Profile, WalletLookup, Admin
+                       AmountForm, StatusBadge, TransactionTable/Detail/Browser
+  pages/               Auth, Dashboard, Transfer, Deposits, History, Profile, WalletLookup, Admin
   utils/               money/date formatting, direction helper, useFetch hook
 ```
 
@@ -53,3 +53,6 @@ src/
 - The role comes from `GET /api/users/me`; the login response only contains the token.
 - Each withdrawal, transfer and admin deposit submit sends a new `Idempotency-Key`.
 - Amounts are shown with 2 to 4 decimals plus the currency of your wallet.
+- Deposits (`/deposits`, nav link and a dashboard card): a form (amount + note or bank reference) that creates a deposit request, and a paged list of your requests with a status filter and PENDING/APPROVED/REJECTED badges. Nothing is credited until an admin approves; each submit sends a new `Idempotency-Key` and the form ignores a second submit while one is in flight.
+- Admin > Deposit requests (`/admin/deposit-requests`): status filter (default PENDING), Approve and Reject buttons (reject asks for a required reason). Buttons are disabled while a call runs, and the list reloads afterwards (also after an error such as "already decided"). The `/admin` routes stay behind the ADMIN guard.
+- Tests: `npm test` (Vitest); `tests/deposits.test.jsx` covers the deposit request pages.

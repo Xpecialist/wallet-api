@@ -160,3 +160,6 @@ Exact resolved dependency versions/CVEs; runtime behavior (date-filter 500, over
 User decisions: self-service deposit and the free 100 initial balance were NOT intentional (new accounts start at 0; money enters only through the admin deposit endpoint; a deposit-request-with-admin-approval feature is a LATER task).
 Fixed in round 1 (confirmed in code, tests added): H1, H2, M2, M3, M4 (the simultaneous-replay 409 stays OPEN), L1, L2, L3, L5, L6, L7.
 Not done: M1, M5, M6, M7, L4, L8-L11. Results: `mvn verify` 159 unit + 108 integration tests pass, frontend 187 tests pass, `npm run build` ok.
+
+## Deposit requests with admin approval (2026-10-21): see DEPOSIT_REQUESTS_LOG.md
+The later task from round 1 is done: users request a deposit, an admin approves or rejects; approval credits the wallet exactly once (request row lock + status re-check + wallet lock). `mvn verify` 174 unit + 133 integration tests, frontend 217 tests, `npm run build` ok. Open items and risks are listed in the log.

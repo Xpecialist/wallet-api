@@ -9,7 +9,8 @@ A simple digital wallet REST API built with Spring Boot 3.3, Java 17, Maven and 
 - Transfer funds to another user by username or by wallet id
 - View your own wallet, or a specific wallet by id (owner or admin)
 - View your transaction history, or a specific transaction by id (participants or admin)
-- Simulated withdrawals (no payment provider). Money enters the system only through the admin deposit endpoint: there is no self-service deposit and new wallets start at 0
+- Simulated withdrawals (no payment provider). Money enters the system only through the admin deposit endpoint or an admin-approved deposit request: there is no self-service deposit and new wallets start at 0
+- Deposit requests: a user asks for money to be added (for example after a bank transfer); the wallet is credited only when an admin approves
 - Optional note on transfers
 - Paginated, sortable, filterable transaction history and admin lists
 - Profile management (view, change email, change password); admins can disable and enable users
@@ -103,6 +104,8 @@ Defined in `src/main/resources/schema.sql`, which runs on every startup. It is i
 
 The owner of an idempotency key is the sender wallet of a transfer or withdrawal and the receiver wallet of a deposit; the unique index `uq_tx_owner_idempotency` on `(COALESCE(sender_wallet_id, receiver_wallet_id), idempotency_key)` makes a key unique per owner, so one user can never block or probe another user's keys.
 
+**deposit_requests**: `id`, `wallet_id` and `user_id` (FKs), `amount` (`NUMERIC(19,4)`, check > 0), `note` (up to 255 chars, e.g. a bank transfer reference), `status` (`PENDING`, `APPROVED`, `REJECTED`, checked), `created_at`, `decided_at`, `decided_by` (admin user id), `decision_note`, `transaction_id` (FK to the DEPOSIT transaction created on approval), `idempotency_key` (unique per wallet via `uq_dr_wallet_idempotency`). A check ties the status to the decision fields (an approved request must have a decider, a time and a transaction; a pending one none), and `uq_dr_transaction` makes a transaction linkable to one request only. Indexes on `wallet_id` and `status`. The table is created by `CREATE TABLE IF NOT EXISTS`, so an existing database simply gains it on the next startup.
+
 A check constraint ties the type to the wallets: a transfer has both wallets, a deposit has only a receiver wallet, a withdrawal has only a sender wallet.
 
 Schema changes in this version (applied automatically to an existing database on startup): `users.enabled` added; `transactions.type` added (existing rows become `TRANSFER`); `transactions.note` added; `NOT NULL` dropped from `sender_wallet_id` and `receiver_wallet_id`; check constraint `chk_tx_type_wallets` and an index on `created_at` added; the old global `UNIQUE` on `idempotency_key` replaced by the per-owner index; unique indexes on `lower(username)` and `lower(email)` added (stray whitespace around existing usernames/emails is trimmed first). If two existing users collide when compared ignoring case/whitespace, startup stops with the message "Schema upgrade aborted: several users have the same username ..." and nothing is changed or deleted; rename or remove one of them and restart.
@@ -129,7 +132,32 @@ Send `Authorization: Bearer <token>` on every endpoint except `/api/auth/**`.
 | GET | `/api/admin/users` | ADMIN | Users, paged and sortable (default sort `id`) |
 | PATCH | `/api/admin/users/{id}/status` | ADMIN | Enable or disable a user |
 | GET | `/api/admin/transactions` | ADMIN | All transactions; same paging, sorting and filters as `/api/transactions` |
-| POST | `/api/admin/wallets/{id}/deposit` | ADMIN | Credit any wallet (simulated); the only way money enters the system; optional `Idempotency-Key` header |
+| POST | `/api/admin/wallets/{id}/deposit` | ADMIN | Credit any wallet (simulated); with deposit-request approval one of the two ways money enters the system; optional `Idempotency-Key` header |
+| POST | `/api/deposit-requests` | any user | Ask for money to be added to your wallet; 201 with a PENDING request; optional `Idempotency-Key` header; 409 if you already have 5 pending (`app.deposit-requests.max-pending`) |
+| GET | `/api/deposit-requests` | any user | Your requests: paged (default 20, max 100), `sort` (`id`, `createdAt`, `amount`, `status`, `decidedAt`; default `createdAt,desc`), filter `status` |
+| GET | `/api/deposit-requests/{id}` | owner | One of your requests (404 for anyone else's, same as a missing one) |
+| GET | `/api/admin/deposit-requests` | ADMIN | All requests with username; filters `status`, `userId`, `username`; same paging/sorting; without `sort` and `status`, PENDING come first |
+| POST | `/api/admin/deposit-requests/{id}/approve` | ADMIN | Approve: credits the wallet exactly once and creates a linked COMPLETED DEPOSIT transaction; optional body `{"decisionNote"}`; 409 if already decided or the user is disabled |
+| POST | `/api/admin/deposit-requests/{id}/reject` | ADMIN | Reject (no money moves); body `{"decisionNote"}` is required (max 255); 409 if already decided |
+
+### Deposit requests
+
+Create (same amount rules as every money endpoint: at least 0.0001, up to 15 integer and 4 fraction digits; `note` optional, max 255):
+
+```json
+{ "amount": 25.50, "note": "bank transfer ref 20261021-77" }
+```
+
+User response (the idempotency key and the deciding admin are never shown to the user):
+
+```json
+{ "id": 4, "walletId": 3, "amount": 25.5000, "note": "bank transfer ref 20261021-77", "status": "PENDING",
+  "createdAt": "2026-10-21T10:00:00", "decidedAt": null, "decisionNote": null, "transactionId": null }
+```
+
+Admin responses additionally contain `userId`, `username` and `decidedBy`. Errors use the usual `{timestamp, status, error}` body: 400 invalid amount/note/key/sort, 401 no token, 403 a USER on `/api/admin/**`, 404 unknown or foreign id, 409 key reused with a different request, pending cap reached, request already APPROVED/REJECTED, or approving a request of a disabled user (it can still be rejected).
+
+After approval the DEPOSIT transaction appears in the user's normal history (note `Deposit request #<id>: <note>`) and the request holds its `transactionId`.
 
 ### Paging, sorting and filtering
 
@@ -281,6 +309,7 @@ On Windows PowerShell use `curl.exe` and single-quoted JSON, or `Invoke-RestMeth
 - **Transfers** run in one database transaction. Both wallet rows are locked with `SELECT ... FOR UPDATE`, always in ascending wallet id order, so opposite transfers cannot deadlock. Wallets also have a `@Version` column as an optimistic-locking safeguard. The balance check requires `balance >= amount`; the currencies of both wallets must match.
 - **Idempotency.** Keys are scoped to the owning wallet (the sender; for a deposit the receiver), so different users can use the same key string independently. If a key was already used by the same owner AND the request is the same (same type, receiver, amount and note for a transfer; same amount for a deposit or withdrawal), the original transaction is returned and nothing is applied. The same key with any difference, or for another operation type, gives 409 "Idempotency key already used with a different request". The header must be 1 to 100 characters (blank or longer gives 400); an absent header means no key. Known limitation: if the same request is sent twice at the same moment, all but one of the simultaneous requests get 409 instead of the original transaction (money still moves exactly once).
 - **Deposits and withdrawals** lock the wallet row (`SELECT ... FOR UPDATE`) while the balance changes. A withdrawal requires `balance >= amount` (422 otherwise). Both are simulated; no payment provider is involved.
+- **Deposit requests.** Creating a request moves no money. Approval runs in one database transaction: the request row is locked (`SELECT ... FOR UPDATE`) and its status re-checked under the lock, then the wallet row is locked with `findByIdForUpdate`, the balance credited, a COMPLETED DEPOSIT transaction saved and the request set to APPROVED with `transaction_id`. Concurrent or repeated approve/reject calls wait on the row lock and then get 409, so the wallet is credited exactly once (a unique index on `transaction_id` is a last safety net). The lock order (request, then wallet) cannot deadlock with transfers, which lock wallets only. Creating a request locks the caller's own wallet row briefly, which makes the pending cap and the idempotency check race-free per user. See `DEPOSIT_REQUESTS_LOG.md`.
 - **Disabled users.** `enabled=false` makes the login fail with the same 401 as a wrong password and makes the JWT filter ignore the user's tokens, so their requests get 401.
 - **Paging.** Handled by Spring Data's `Pageable` argument resolver; the size cap is `spring.data.web.pageable.max-page-size=100`. Transaction filters are built as JPA `Specification`s.
 - **Access rules.** A wallet is visible to its owner and admins. A transaction is visible to the owners of its sender and receiver wallets and admins. Anyone else gets 404, the same as for a missing id. Registration always creates role USER.
@@ -297,10 +326,11 @@ wallet-api
     schema.sql
   src/main/java/com/example/wallet
     WalletApiApplication.java
-    controller   AuthController, WalletController, TransactionController, UserController, AdminController
-    service      AuthService, WalletService, TransactionService, UserService, AdminBootstrap
-    repository   UserRepository, WalletRepository, TransactionRepository
-    entity       User, Wallet, Transaction, Role, TransactionStatus, TransactionType
+    controller   AuthController, WalletController, TransactionController, UserController, AdminController,
+                 DepositRequestController, AdminDepositRequestController
+    service      AuthService, WalletService, TransactionService, DepositRequestService, UserService, AdminBootstrap
+    repository   UserRepository, WalletRepository, TransactionRepository, DepositRequestRepository
+    entity       User, Wallet, Transaction, DepositRequest, DepositRequestStatus, Role, TransactionStatus, TransactionType
     dto          request/response records
     security     SecurityConfig, JwtAuthFilter, JwtService
     exception    ApiException, GlobalExceptionHandler

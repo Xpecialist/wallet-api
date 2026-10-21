@@ -47,7 +47,7 @@ abstract class ItBase {
         try (Connection c = dataSource.getConnection()) {
             TestDbGuard.assertConnectedToTestDb(c); // never truncate anything but walletdb_test
         }
-        jdbc.execute("TRUNCATE TABLE transactions, wallets, users RESTART IDENTITY CASCADE");
+        jdbc.execute("TRUNCATE TABLE deposit_requests, transactions, wallets, users RESTART IDENTITY CASCADE");
     }
 
     // ---- request helpers -------------------------------------------------------------------------------------

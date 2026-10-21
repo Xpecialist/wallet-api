@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { AdminOnly, ProtectedLayout } from './components/Layout.jsx';
 import {
   AdminDepositPage,
+  AdminDepositRequestsPage,
   AdminIndex,
   AdminLayout,
   AdminTransactionsPage,
@@ -9,6 +10,7 @@ import {
 } from './pages/AdminPages.jsx';
 import { LoginPage, RegisterPage } from './pages/AuthPages.jsx';
 import DashboardPage from './pages/DashboardPage.jsx';
+import DepositsPage from './pages/DepositsPage.jsx';
 import HistoryPage from './pages/HistoryPage.jsx';
 import ProfilePage from './pages/ProfilePage.jsx';
 import TransferPage from './pages/TransferPage.jsx';
@@ -23,6 +25,7 @@ export default function App() {
       <Route element={<ProtectedLayout />}>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/transfer" element={<TransferPage />} />
+        <Route path="/deposits" element={<DepositsPage />} />
         <Route path="/history" element={<HistoryPage />} />
         <Route path="/lookup" element={<WalletLookupPage />} />
         <Route path="/profile" element={<ProfilePage />} />
@@ -31,6 +34,7 @@ export default function App() {
             <Route index element={<AdminIndex />} />
             <Route path="users" element={<AdminUsersPage />} />
             <Route path="transactions" element={<AdminTransactionsPage />} />
+            <Route path="deposit-requests" element={<AdminDepositRequestsPage />} />
             <Route path="deposit" element={<AdminDepositPage />} />
           </Route>
         </Route>

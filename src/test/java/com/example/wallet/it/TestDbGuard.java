@@ -48,7 +48,7 @@ public class TestDbGuard implements ApplicationContextInitializer<ConfigurableAp
                 env.getProperty("spring.datasource.username"), env.getProperty("spring.datasource.password"))) {
             assertConnectedToTestDb(c);
             try (Statement st = c.createStatement()) {
-                st.execute("DROP TABLE IF EXISTS transactions, wallets, users CASCADE");
+                st.execute("DROP TABLE IF EXISTS deposit_requests, transactions, wallets, users CASCADE");
             }
         } catch (RuntimeException e) {
             throw e;

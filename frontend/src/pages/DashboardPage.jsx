@@ -7,7 +7,7 @@ import { TransactionTable } from '../components/TransactionTable.jsx';
 import { formatMoney } from '../utils/format.js';
 import { useFetch } from '../utils/useFetch.js';
 
-/** Balance, withdraw form and the latest transactions. Money can only be added by an admin (admin deposit page). */
+/** Balance, withdraw form and the latest transactions. Money is added only when an admin approves a deposit request. */
 export default function DashboardPage() {
   const { wallet, refreshWallet } = useAuth();
   const recent = useFetch(() => api.transactions({ size: 5, sort: 'createdAt,desc' }), []);
@@ -27,6 +27,13 @@ export default function DashboardPage() {
         <span className="muted">Current balance</span>
         <strong className="balance-amount">{formatMoney(wallet.balance, wallet.currency)}</strong>
         <span className="muted">Wallet ID {wallet.id}</span>
+      </section>
+
+      <section className="card">
+        <h2>Add funds</h2>
+        <p className="muted">
+          Money is added only after an admin approves your request. <Link to="/deposits">Request a deposit</Link>
+        </p>
       </section>
 
       <AmountForm title="Withdraw" submitText="Withdraw" action={api.withdraw} onDone={afterChange} />

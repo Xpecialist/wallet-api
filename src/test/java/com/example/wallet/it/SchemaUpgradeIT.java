@@ -32,7 +32,7 @@ class SchemaUpgradeIT {
             TestDbGuard.assertConnectedToTestDb(c);
         }
         jdbc = new JdbcTemplate(ds);
-        jdbc.execute("DROP TABLE IF EXISTS transactions, wallets, users CASCADE");
+        jdbc.execute("DROP TABLE IF EXISTS deposit_requests, transactions, wallets, users CASCADE");
         run("old-schema.sql");
         jdbc.update("insert into users(id,username,email,password_hash) values "
                 + "(1,'alice','alice@example.com','h'),(2,'bob','bob@example.com','h'),(3,'dave ','dave@example.com ','h')");
@@ -47,7 +47,7 @@ class SchemaUpgradeIT {
 
     @AfterEach
     void rebuildCurrentSchema() {
-        jdbc.execute("DROP TABLE IF EXISTS transactions, wallets, users CASCADE");
+        jdbc.execute("DROP TABLE IF EXISTS deposit_requests, transactions, wallets, users CASCADE");
         run("schema.sql");
     }
 
@@ -113,6 +113,38 @@ class SchemaUpgradeIT {
                 + "('ALICE','other@example.com','h')")).isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> jdbc.update("insert into users(username,email,password_hash) values "
                 + "('zed','Alice@Example.com','h')")).isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void upgradeAddsTheDepositRequestsTableToAnOldDatabaseAndEnforcesItsConstraints() {
+        assertThat(count("select count(*) from pg_tables where schemaname=current_schema() "
+                + "and tablename='deposit_requests'")).as("old database has no such table").isZero();
+        run("schema.sql");
+        assertThat(count("select count(*) from pg_tables where schemaname=current_schema() "
+                + "and tablename='deposit_requests'")).isEqualTo(1);
+        assertThat(count("select count(*) from pg_indexes where indexname in ('idx_dr_wallet','idx_dr_status',"
+                + "'uq_dr_wallet_idempotency','uq_dr_transaction')")).isEqualTo(4);
+        assertThat(count("select count(*) from users")).as("old data untouched").isEqualTo(3);
+
+        jdbc.update("insert into deposit_requests(wallet_id,user_id,amount,idempotency_key) values (1,1,5,'k')");
+        assertThat(jdbc.queryForObject("select status from deposit_requests", String.class)).isEqualTo("PENDING");
+        assertThatThrownBy(() -> jdbc.update(
+                "insert into deposit_requests(wallet_id,user_id,amount) values (1,1,0)"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> jdbc.update(
+                "insert into deposit_requests(wallet_id,user_id,amount,status) values (1,1,5,'BOGUS')"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> jdbc.update(
+                "insert into deposit_requests(wallet_id,user_id,amount,idempotency_key) values (1,1,5,'k')"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        jdbc.update("insert into deposit_requests(wallet_id,user_id,amount,idempotency_key) values (2,2,5,'k')");
+        // APPROVED needs the decision data and a transaction; one transaction cannot back two requests
+        assertThatThrownBy(() -> jdbc.update("update deposit_requests set status='APPROVED' where wallet_id=1"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+        jdbc.update("update deposit_requests set status='APPROVED', decided_at=now(), decided_by=3, transaction_id=1 "
+                + "where wallet_id=1");
+        assertThatThrownBy(() -> jdbc.update("update deposit_requests set status='APPROVED', decided_at=now(), "
+                + "decided_by=3, transaction_id=1 where wallet_id=2")).isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test

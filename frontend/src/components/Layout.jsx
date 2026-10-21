@@ -18,6 +18,7 @@ export function NavBar() {
       <nav>
         <NavLink to="/" end>Dashboard</NavLink>
         <NavLink to="/transfer">Transfer</NavLink>
+        <NavLink to="/deposits">Deposits</NavLink>
         <NavLink to="/history">History</NavLink>
         <NavLink to="/lookup">Wallet lookup</NavLink>
         <NavLink to="/profile">Profile</NavLink>

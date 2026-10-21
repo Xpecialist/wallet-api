@@ -10,6 +10,7 @@ final class SortWhitelist {
     static final Set<String> USERS = Set.of("id", "username", "email", "role", "enabled", "createdAt");
     static final Set<String> TRANSACTIONS = Set.of("id", "createdAt", "amount", "type", "status",
             "senderWalletId", "receiverWalletId");
+    static final Set<String> DEPOSIT_REQUESTS = Set.of("id", "createdAt", "amount", "status", "decidedAt");
 
     private SortWhitelist() {}
 
