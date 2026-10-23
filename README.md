@@ -25,7 +25,7 @@ A simple digital wallet REST API built with Spring Boot 4.1, Java 17, Maven and 
 
 ## Setup
 
-1. Create the database (the tables are created by the app on startup):
+1. Create the database (Flyway creates the tables when the app starts):
 
    ```
    psql -U postgres -h localhost -c "CREATE DATABASE walletdb"
@@ -98,7 +98,7 @@ Then open `http://localhost:5173`. The dev server proxies `/api` to the backend.
 
 ## Data model
 
-Defined in `src/main/resources/schema.sql`, which runs on every startup. It is idempotent: tables are `CREATE TABLE IF NOT EXISTS`, and the `ALTER TABLE` statements at the end upgrade a database created by an earlier version without dropping data.
+Created by the Flyway migration `src/main/resources/db/migration/V1__baseline.sql` (see [Database schema](#database-schema-flyway)).
 
 **users**: `id`, `username` (unique, also case-insensitively via `uq_users_username_lower`), `email` (unique, also case-insensitively via `uq_users_email_lower`), `password_hash` (BCrypt), `role` (`USER` or `ADMIN`, default `USER`), `enabled` (boolean, default true), `created_at`
 
@@ -108,13 +108,22 @@ Defined in `src/main/resources/schema.sql`, which runs on every startup. It is i
 
 The owner of an idempotency key is the sender wallet of a transfer or withdrawal and the receiver wallet of a deposit; the unique index `uq_tx_owner_idempotency` on `(COALESCE(sender_wallet_id, receiver_wallet_id), idempotency_key)` makes a key unique per owner, so one user can never block or probe another user's keys.
 
-**deposit_requests**: `id`, `wallet_id` and `user_id` (FKs), `amount` (`NUMERIC(19,4)`, check > 0), `note` (up to 255 chars, e.g. a bank transfer reference), `status` (`PENDING`, `APPROVED`, `REJECTED`, checked), `created_at`, `decided_at`, `decided_by` (admin user id), `decision_note`, `transaction_id` (FK to the DEPOSIT transaction created on approval), `idempotency_key` (unique per wallet via `uq_dr_wallet_idempotency`). A check ties the status to the decision fields (an approved request must have a decider, a time and a transaction; a pending one none), and `uq_dr_transaction` makes a transaction linkable to one request only. Indexes on `wallet_id` and `status`. The table is created by `CREATE TABLE IF NOT EXISTS`, so an existing database simply gains it on the next startup.
+**deposit_requests**: `id`, `wallet_id` and `user_id` (FKs), `amount` (`NUMERIC(19,4)`, check > 0), `note` (up to 255 chars, e.g. a bank transfer reference), `status` (`PENDING`, `APPROVED`, `REJECTED`, checked), `created_at`, `decided_at`, `decided_by` (admin user id), `decision_note`, `transaction_id` (FK to the DEPOSIT transaction created on approval), `idempotency_key` (unique per wallet via `uq_dr_wallet_idempotency`). A check ties the status to the decision fields (an approved request must have a decider, a time and a transaction; a pending one none), and `uq_dr_transaction` makes a transaction linkable to one request only. Indexes on `wallet_id` and `status`. 
 
 A check constraint ties the type to the wallets: a transfer has both wallets, a deposit has only a receiver wallet, a withdrawal has only a sender wallet.
 
-Schema changes in this version (applied automatically to an existing database on startup): `users.enabled` added; `transactions.type` added (existing rows become `TRANSFER`); `transactions.note` added; `NOT NULL` dropped from `sender_wallet_id` and `receiver_wallet_id`; check constraint `chk_tx_type_wallets` and an index on `created_at` added; the old global `UNIQUE` on `idempotency_key` replaced by the per-owner index; unique indexes on `lower(username)` and `lower(email)` added (stray whitespace around existing usernames/emails is trimmed first). If two existing users collide when compared ignoring case/whitespace, startup stops with the message "Schema upgrade aborted: several users have the same username ..." and nothing is changed or deleted; rename or remove one of them and restart.
 
 `role` and `enabled` are additions to the data model originally specified.
+
+## Database schema (Flyway)
+
+Flyway owns the schema. Migrations live in `src/main/resources/db/migration` and run at startup, each exactly once; applied versions are recorded in the table `flyway_schema_history`. Hibernate only validates the result (`spring.jpa.hibernate.ddl-auto=validate`). `V1__baseline.sql` is the complete current schema (users, wallets, transactions, deposit_requests with all constraints and indexes).
+
+**Changing the schema.** Add a new file `V2__short_description.sql` (next number, two underscores, plain SQL) next to V1 and update the entities. NEVER edit or rename a migration that has been applied anywhere: Flyway validates checksums at startup and refuses to start if an applied file changed. To fix a mistake, add a new migration.
+
+**Existing databases.** A database created by the previous code (`schema.sql` at every start) has the V1 shape but no `flyway_schema_history`. With `spring.flyway.baseline-on-migrate=true` and `baseline-version=1`, Flyway records it as "already at version 1" and does not run V1 again; later migrations then apply normally. An EMPTY database is never baselined: it runs V1 in full. Because a baseline skips V1, the database must really be at the current shape. On such a database the app first checks the tables, indexes and constraints that V1 defines (`SchemaShapeGuard`) and refuses to start, listing what is missing, if it is older. Supported paths for an older database: first start the previous version of the app once so its `schema.sql` upgrades it to the current shape, or recreate the database. (The same check also runs after every migration, so a dropped index or constraint stops startup.)
+
+**Warning: clean.** Flyway `clean` drops everything in the schema. It is disabled (`spring.flyway.clean-disabled=true`) and must stay disabled; only the integration-test profile enables it, and the tests refuse to run against any database other than `walletdb_test`.
 
 ## API
 
@@ -318,7 +327,7 @@ On Windows PowerShell use `curl.exe` and single-quoted JSON, or `Invoke-RestMeth
 - **Paging.** Handled by Spring Data's `Pageable` argument resolver; the size cap is `spring.data.web.pageable.max-page-size=100`. Transaction filters are built as JPA `Specification`s.
 - **Access rules.** A wallet is visible to its owner and admins. A transaction is visible to the owners of its sender and receiver wallets and admins. Anyone else gets 404, the same as for a missing id. Registration always creates role USER.
 - **Admin bootstrap.** At startup, if `ADMIN_PASSWORD` (`app.admin.password`) is non-empty (and at least 12 characters, at most 72 bytes) and no user named `app.admin.username` exists, an ADMIN user and wallet are created. An existing account is never modified. The admin username and email are reserved against registration. If the password is too weak, or the username or email is already taken by another account, an error is logged and the admin is not created, but the app still starts.
-- **Schema.** `schema.sql` creates the tables at startup (`spring.sql.init.mode=always`); Hibernate only checks them (`spring.jpa.hibernate.ddl-auto=validate`), so an entity/schema mismatch stops startup.
+- **Schema.** Flyway migrations create and change the tables at startup; Hibernate only checks them (`spring.jpa.hibernate.ddl-auto=validate`), so an entity/schema mismatch stops startup.
 
 ## Project structure
 
@@ -327,7 +336,7 @@ wallet-api
   pom.xml
   src/main/resources
     application.properties
-    schema.sql
+    db/migration/V1__baseline.sql
   src/main/java/com/example/wallet
     WalletApiApplication.java
     controller   AuthController, WalletController, TransactionController, UserController, AdminController,
@@ -336,6 +345,7 @@ wallet-api
     repository   UserRepository, WalletRepository, TransactionRepository, DepositRequestRepository
     entity       User, Wallet, Transaction, DepositRequest, DepositRequestStatus, Role, TransactionStatus, TransactionType
     dto          request/response records
+    config       SchemaShapeGuard (Flyway baseline safety check)
     security     SecurityConfig, JwtAuthFilter, JwtService
     exception    ApiException, GlobalExceptionHandler
 ```
@@ -343,5 +353,5 @@ wallet-api
 ## Status and limitations
 
 - Automated tests: `mvn test` (unit, no database), `mvn verify` (also the integration tests against a separate empty database `walletdb_test`), `cd frontend && npm test`. See `TEST_FINDINGS.md`, `SECURITY_FIXES_LOG.md`.
-- Not done yet (see `TEST_FINDINGS.md`): rate limiting, dependency upgrade, a migration tool such as Flyway, DB credential hardening, token revocation on password change.
+- Not done yet (see `TEST_FINDINGS.md`): rate limiting, DB credential hardening, token revocation on password change.
 - Defaults are for local development only: the `postgres`/`postgres` database credentials and the plain JDBC URL. There is no default JWT secret.

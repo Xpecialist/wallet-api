@@ -5,6 +5,7 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.regex.Pattern;
+import org.flywaydb.core.Flyway;
 import org.springframework.context.ApplicationContextInitializer;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.ConfigurableEnvironment;
@@ -12,8 +13,8 @@ import org.springframework.core.env.ConfigurableEnvironment;
 /**
  * Hard safety guard for the integration tests. Runs before the Spring context (and so before any SQL) and aborts
  * unless the RESOLVED datasource URL (including env var / system property overrides) points at the dedicated
- * {@code walletdb_test} database on localhost. Then it drops the app tables so each run starts from an empty schema
- * (the app's own schema.sql recreates them at startup).
+ * {@code walletdb_test} database on localhost. Then it runs Flyway clean so each context starts from an empty database
+ * (the application's Flyway migrations rebuild the schema at startup).
  */
 public class TestDbGuard implements ApplicationContextInitializer<ConfigurableApplicationContext> {
     public static final String TEST_DB = "walletdb_test";
@@ -47,13 +48,19 @@ public class TestDbGuard implements ApplicationContextInitializer<ConfigurableAp
         try (Connection c = DriverManager.getConnection(url,
                 env.getProperty("spring.datasource.username"), env.getProperty("spring.datasource.password"))) {
             assertConnectedToTestDb(c);
-            try (Statement st = c.createStatement()) {
-                st.execute("DROP TABLE IF EXISTS deposit_requests, transactions, wallets, users CASCADE");
-            }
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException("Cannot reset test schema", e);
         }
+        // Only reached after both guards above passed. Flyway then migrates the empty database at context startup.
+        cleanTestDatabase(url, env.getProperty("spring.datasource.username"),
+                env.getProperty("spring.datasource.password"));
+    }
+
+    /** Flyway clean on walletdb_test (re-checks the URL itself, so it can never run against another database). */
+    public static void cleanTestDatabase(String url, String user, String password) {
+        assertTestUrl(url);
+        Flyway.configure().dataSource(url, user, password).cleanDisabled(false).load().clean();
     }
 }
