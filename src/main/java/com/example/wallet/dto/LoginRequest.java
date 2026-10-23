@@ -8,4 +8,4 @@ import jakarta.validation.constraints.NotBlank;
  * @param username the account's username
  * @param password the raw password
  */
-public record LoginRequest(@NotBlank String username, @NotBlank String password) {}
+public record LoginRequest(@NotBlank @NoNul String username, @NotBlank String password) {}

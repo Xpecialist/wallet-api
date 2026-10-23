@@ -100,13 +100,14 @@ public class TransactionService {
             }
         }
 
-        // Lock both wallets in id order to avoid deadlocks.
+        // Lock both wallets in id order to avoid deadlocks. The sender wallet exists (looked up above), so a missing one
+        // is always the receiver: every unknown receiver, by name or by id, gets the same 404 "Receiver not found".
         Long firstId = Math.min(senderRef.getId(), receiverId);
         Long secondId = Math.max(senderRef.getId(), receiverId);
         Wallet first = wallets.findByIdForUpdate(firstId)
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Wallet not found"));
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Receiver not found"));
         Wallet second = wallets.findByIdForUpdate(secondId)
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Receiver wallet not found"));
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Receiver not found"));
         Wallet sender = first.getId().equals(senderRef.getId()) ? first : second;
         Wallet receiver = sender == first ? second : first;
 
@@ -262,6 +263,8 @@ public class TransactionService {
     @Transactional(readOnly = true)
     public PageResponse<TransactionResponse> history(String username, TransactionFilter filter, Pageable pageable) {
         SortWhitelist.check(pageable, SortWhitelist.TRANSACTIONS);
+        RequestLimits.checkPage(pageable);
+        RequestLimits.checkDates(filter);
         Wallet w = wallets.findByUserUsername(username)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Wallet not found"));
         return PageResponse.from(transactions.findAll(spec(filter, w.getId()), pageable)
@@ -303,6 +306,8 @@ public class TransactionService {
     @Transactional(readOnly = true)
     public PageResponse<TransactionResponse> listAll(TransactionFilter filter, Pageable pageable) {
         SortWhitelist.check(pageable, SortWhitelist.TRANSACTIONS);
+        RequestLimits.checkPage(pageable);
+        RequestLimits.checkDates(filter);
         return PageResponse.from(transactions.findAll(spec(filter, null), pageable).map(TransactionResponse::from));
     }
 

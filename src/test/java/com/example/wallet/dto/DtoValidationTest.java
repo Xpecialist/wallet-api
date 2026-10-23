@@ -100,4 +100,59 @@ class DtoValidationTest {
         assertThat(v.validate(new UserStatusRequest(false))).isEmpty();
         assertThat(fields(new UserStatusRequest(null))).containsExactly("enabled");
     }
+
+    // ---- round 2: F2 (NUL) and F8 (invisible/control characters) ----
+
+    @ParameterizedTest
+    @ValueSource(strings = {"alice", "Alice.B-c_d", "user1", "a.b", "  Carol  ", "x-y"})
+    void usernameAcceptsLettersDigitsAndDotUnderscoreDash(String name) {
+        assertThat(v.validate(new RegisterRequest(name, "a@b.co", "12345678"))).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"al\u0000ice", "alice​", "ali­ce", "bad\nuser", "bad\tuser", "ali ce",
+            "аlice", "ａlice", "alice‮", "al ice", "a@b.c", "al'ice", "alice\n", "‍abc"})
+    void usernameRejectsControlFormatLookAlikeAndOtherCharacters(String name) {
+        assertThat(fields(new RegisterRequest(name, "a@b.co", "12345678"))).containsExactly("username");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"al\u0000ice", "alice​", "ali­ce", "line1\nline2", "tab\there", "x‮y",
+            "a b", "a\u0007b", "lone\uD800surrogate", "‍x"})
+    void notesRejectNulControlFormatAndBidiCharacters(String note) {
+        assertThat(fields(new TransferRequest("bob", null, BigDecimal.ONE, note))).containsExactly("note");
+        assertThat(fields(new CreateDepositRequest(BigDecimal.ONE, note))).containsExactly("note");
+        assertThat(fields(new DepositDecisionRequest(note))).containsExactly("decisionNote");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"lunch with Bob", "Café — 日本語 😀", "ref #123: 50.00", " padded "})
+    void notesAcceptOrdinaryTextIncludingUnicodeLettersAndSpaces(String note) {
+        assertThat(v.validate(new TransferRequest("bob", null, BigDecimal.ONE, note))).isEmpty();
+        assertThat(v.validate(new CreateDepositRequest(BigDecimal.ONE, note))).isEmpty();
+        assertThat(v.validate(new DepositDecisionRequest(note))).isEmpty();
+    }
+
+    @Test
+    void loginAndReceiverUsernameOnlyRejectNulSoLegacyNamesStayReachable() {
+        assertThat(fields(new LoginRequest("al\u0000ice", "pw"))).containsExactly("username");
+        assertThat(v.validate(new LoginRequest("ali​ce", "pw"))).isEmpty();
+        assertThat(v.validate(new LoginRequest("Some Legacy Name", "pw"))).isEmpty();
+        assertThat(fields(new TransferRequest("bo\u0000b", null, BigDecimal.ONE, null))).containsExactly("receiverUsername");
+        assertThat(v.validate(new TransferRequest("bob​", null, BigDecimal.ONE, null))).isEmpty();
+    }
+
+    @Test
+    void emailRejectsControlAndInvisibleCharacters() {
+        for (String mail : new String[] {"a\u0000@b.co", "a@b​.co", "a­@b.co", "a@b.co\n", "a‮@b.co"}) {
+            assertThat(fields(new RegisterRequest("abc", mail, "12345678"))).as(mail).contains("email");
+            assertThat(fields(new UpdateProfileRequest(mail))).as(mail).contains("email");
+        }
+    }
+
+    @Test
+    void currentPasswordOver72BytesIsRejectedOnPasswordChange() {
+        assertThat(v.validate(new ChangePasswordRequest("x".repeat(72), "12345678"))).isEmpty();
+        assertThat(fields(new ChangePasswordRequest("x".repeat(73), "12345678"))).containsExactly("currentPassword");
+    }
 }

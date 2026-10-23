@@ -122,6 +122,7 @@ public class DepositRequestService {
     public PageResponse<DepositRequestResponse> listOwn(String username, DepositRequestStatus status,
                                                          Pageable pageable) {
         SortWhitelist.check(pageable, SortWhitelist.DEPOSIT_REQUESTS);
+        RequestLimits.checkPage(pageable);
         Wallet w = wallets.findByUserUsername(username)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Wallet not found"));
         return PageResponse.from(requests.findAll(spec(w.getId(), status, null, null, false), pageable)
@@ -163,6 +164,7 @@ public class DepositRequestService {
     public PageResponse<AdminDepositRequestResponse> listAll(DepositRequestStatus status, Long userId,
                                                               String username, Pageable pageable) {
         SortWhitelist.check(pageable, SortWhitelist.DEPOSIT_REQUESTS);
+        RequestLimits.checkPage(pageable);
         boolean pendingFirst = status == null && pageable.getSort().isUnsorted();
         return PageResponse.from(requests.findAll(spec(null, status, userId, username, pendingFirst), pageable)
                 .map(AdminDepositRequestResponse::from));

@@ -42,6 +42,8 @@ function AuthPage({ title, submitText, request, fields, footer }) {
               required
               minLength={f.minLength}
               maxLength={f.maxLength}
+              pattern={f.pattern}
+              title={f.title}
               autoComplete={f.autoComplete}
               value={values[f.name]}
               onChange={(e) => setValues({ ...values, [f.name]: e.target.value })}
@@ -79,7 +81,16 @@ export function RegisterPage() {
       submitText="Register"
       request={(v) => api.register(v.username, v.email, v.password)}
       fields={[
-        { name: 'username', label: 'Username (3-50 characters)', minLength: 3, maxLength: 50, autoComplete: 'username' },
+        {
+          name: 'username',
+          label: 'Username (3-50: letters, digits, . _ -)',
+          minLength: 3,
+          maxLength: 50,
+          // the server trims surrounding spaces and accepts only ASCII letters, digits and . _ -
+          pattern: '\\s*[A-Za-z0-9._\\-]+\\s*',
+          title: 'Letters, digits, dot, underscore or dash only (no spaces)',
+          autoComplete: 'username',
+        },
         { name: 'email', label: 'Email', type: 'email', autoComplete: 'email' },
         { name: 'password', label: 'Password (8-72 characters)', type: 'password', minLength: 8, maxLength: 72, autoComplete: 'new-password' },
       ]}

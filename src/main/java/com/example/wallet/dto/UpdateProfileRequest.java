@@ -8,4 +8,4 @@ import jakarta.validation.constraints.NotBlank;
  *
  * @param email the new, well-formed and unique email address
  */
-public record UpdateProfileRequest(@NotBlank @Email String email) {}
+public record UpdateProfileRequest(@NotBlank @Email @PlainText String email) {}

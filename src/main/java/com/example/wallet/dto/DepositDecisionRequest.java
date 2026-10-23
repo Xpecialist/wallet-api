@@ -8,4 +8,4 @@ import jakarta.validation.constraints.Size;
  *
  * @param decisionNote the admin note, at most 255 characters
  */
-public record DepositDecisionRequest(@Size(max = 255) String decisionNote) {}
+public record DepositDecisionRequest(@Size(max = 255) @PlainText String decisionNote) {}

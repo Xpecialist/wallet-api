@@ -114,6 +114,17 @@ describe('register', () => {
     expect(screen.getByLabelText(/^Password/)).toHaveAttribute('maxlength', '72');
   });
 
+  it('declares the username character rule (letters, digits, . _ - only) and says so in the label', () => {
+    renderApp('/register');
+    const input = screen.getByLabelText(/^Username/);
+    expect(input).toHaveAccessibleName(/letters, digits, \. _ -/);
+    const re = new RegExp(`^(?:${input.getAttribute('pattern')})$`, 'u'); // HTML anchors the pattern the same way
+    for (const ok of ['alice', 'Bob.Smith', 'carol_1', 'dave-2', '  Erin  ']) expect(re.test(ok), ok).toBe(true);
+    for (const bad of ['al ice', 'alice​', 'ali­ce', 'аlice', 'ａlice', 'a@b', 'a/b', 'café']) {
+      expect(re.test(bad), bad).toBe(false);
+    }
+  });
+
   it('caps username at 50 and password at 72 characters', async () => {
     mockFetch({});
     renderApp('/register');

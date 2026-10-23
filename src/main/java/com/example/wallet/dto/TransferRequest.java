@@ -16,7 +16,7 @@ import java.math.BigDecimal;
  * @param note             optional note stored on the transaction, at most 255 characters
  */
 public record TransferRequest(
-        String receiverUsername,
+        @NoNul String receiverUsername,
         Long receiverWalletId,
         @NotNull @DecimalMin("0.0001") @Digits(integer = 15, fraction = 4) BigDecimal amount,
-        @Size(max = 255) String note) {}
+        @Size(max = 255) @PlainText String note) {}

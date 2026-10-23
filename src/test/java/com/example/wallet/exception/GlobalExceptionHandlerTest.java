@@ -40,6 +40,13 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    void invalidByteSequenceFromTheDatabaseIs400NotA500() {
+        var r = handler.integrity(violation("22021"));
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(r.getBody().get("error").toString()).contains("invalid character");
+    }
+
+    @Test
     void outOfRangeOrTooLongValuesAre400() {
         assertThat(handler.integrity(violation("22003")).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(handler.integrity(violation("22001")).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);

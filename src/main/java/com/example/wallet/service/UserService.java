@@ -93,6 +93,7 @@ public class UserService {
     @Transactional(readOnly = true)
     public PageResponse<UserResponse> listAll(Pageable pageable) {
         SortWhitelist.check(pageable, SortWhitelist.USERS);
+        RequestLimits.checkPage(pageable);
         return PageResponse.from(users.findAll(pageable).map(UserResponse::from));
     }
 

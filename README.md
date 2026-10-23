@@ -167,8 +167,8 @@ After approval the DEPOSIT transaction appears in the user's normal history (not
 
 `GET /api/transactions`, `GET /api/admin/transactions` and `GET /api/admin/users` accept:
 
-- `page` (zero-based, default 0), `size` (default 20, capped at 100), `sort` (`property,asc|desc`, for example `sort=amount,desc`). Sorting is limited to a whitelist, anything else returns 400: users `id`, `username`, `email`, `role`, `enabled`, `createdAt`; transactions `id`, `createdAt`, `amount`, `type`, `status`, `senderWalletId`, `receiverWalletId`.
-- Transaction lists also accept the filters `from` and `to` (`yyyy-MM-dd`, both inclusive), `minAmount`, `maxAmount`, `status` (`PENDING`, `COMPLETED`, `FAILED`) and `type` (`TRANSFER`, `DEPOSIT`, `WITHDRAWAL`).
+- `page` (zero-based, default 0; the row offset `page * size` must fit in an int, otherwise 400 "page is too large"), `size` (default 20, capped at 100), `sort` (`property,asc|desc`, for example `sort=amount,desc`). Sorting is limited to a whitelist, anything else returns 400: users `id`, `username`, `email`, `role`, `enabled`, `createdAt`; transactions `id`, `createdAt`, `amount`, `type`, `status`, `senderWalletId`, `receiverWalletId`.
+- Transaction lists also accept the filters `from` and `to` (`yyyy-MM-dd`, both inclusive, between 1900-01-01 and 2200-12-31, otherwise 400), `minAmount`, `maxAmount`, `status` (`PENDING`, `COMPLETED`, `FAILED`) and `type` (`TRANSFER`, `DEPOSIT`, `WITHDRAWAL`).
 
 Responses are page objects:
 
@@ -180,7 +180,7 @@ Example: `GET /api/transactions?type=DEPOSIT&minAmount=40&sort=amount,asc&size=1
 
 ### Example bodies
 
-Register (`username` 3-50 chars after trimming, valid `email`, `password` 8-72 characters and at most 72 bytes in UTF-8) and login. Usernames and emails are trimmed and unique ignoring case (`Alice` and `alice` are the same account); the casing you registered with is kept for display, and login accepts any casing. The admin username and email are reserved and cannot be registered:
+Register (`username` 3-50 chars after trimming, only ASCII letters, digits and `.` `_` `-` (no spaces, look-alike or invisible characters), valid `email`, `password` 8-72 characters and at most 72 bytes in UTF-8) and login. Usernames and emails are trimmed and unique ignoring case (`Alice` and `alice` are the same account); the casing you registered with is kept for display, and login accepts any casing. The admin username and email are reserved and cannot be registered:
 
 ```json
 { "username": "alice", "email": "alice@example.com", "password": "password123" }
@@ -205,7 +205,7 @@ Transfer request: give `receiverUsername` or `receiverWalletId` (if both are pre
 { "receiverUsername": "bob", "amount": 25.50, "note": "lunch" }
 ```
 
-`note` is optional (at most 255 characters).
+`note` is optional (at most 255 characters). Notes (also deposit-request and decision notes) may not contain control characters (newline, tab, NUL), invisible/format characters (zero-width, soft hyphen, bidi overrides) or line separators; ordinary Unicode text and spaces are fine, otherwise 400. An unknown receiver gives the same 404 "Receiver not found" whether given by username or wallet id.
 
 Deposit and withdrawal request (same body for `/api/wallets/me/withdraw` and `/api/admin/wallets/{id}/deposit`; same amount rules as transfers):
 
@@ -309,7 +309,7 @@ On Windows PowerShell use `curl.exe` and single-quoted JSON, or `Invoke-RestMeth
 
 ## Design notes
 
-- **JWT auth.** Tokens are HMAC-signed with the Base64 secret in `app.jwt.secret`, with the username as subject plus issued-at and expiry. `JwtAuthFilter` validates the bearer token and loads the user (and current role) from the database on each request. Sessions and CSRF are disabled. Missing or invalid tokens leave the request unauthenticated; protected endpoints then return 401. Authenticated non-admins on `/api/admin/**` get 403. `/error` is public so error forwards keep their real status.
+- **JWT auth.** Tokens are HMAC-signed with the Base64 secret in `app.jwt.secret`, with the username as subject plus issued-at and expiry. `JwtAuthFilter` validates the bearer token and loads the user (and current role) from the database on each request. Sessions and CSRF are disabled. Missing or invalid tokens leave the request unauthenticated; protected endpoints then return 401. Authenticated non-admins on `/api/admin/**` get 403. The container's error forward to `/error` is public (dispatcher type ERROR) so error forwards keep their real status; a direct request to `/error` is denied (401/403), never a 500. Multipart is disabled (no uploads), so `multipart/form-data` gets 415. Login compares the password before checking the disabled flag (no timing difference) and treats passwords over 72 bytes as wrong.
 - **Transfers** run in one database transaction. Both wallet rows are locked with `SELECT ... FOR UPDATE`, always in ascending wallet id order, so opposite transfers cannot deadlock. Wallets also have a `@Version` column as an optimistic-locking safeguard. The balance check requires `balance >= amount`; the currencies of both wallets must match.
 - **Idempotency.** Keys are scoped to the owning wallet (the sender; for a deposit the receiver), so different users can use the same key string independently. If a key was already used by the same owner AND the request is the same (same type, receiver, amount and note for a transfer; same amount for a deposit or withdrawal), the original transaction is returned and nothing is applied. The same key with any difference, or for another operation type, gives 409 "Idempotency key already used with a different request". The header must be 1 to 100 characters (blank or longer gives 400); an absent header means no key. Known limitation: if the same request is sent twice at the same moment, all but one of the simultaneous requests get 409 instead of the original transaction (money still moves exactly once).
 - **Deposits and withdrawals** lock the wallet row (`SELECT ... FOR UPDATE`) while the balance changes. A withdrawal requires `balance >= amount` (422 otherwise). Both are simulated; no payment provider is involved.

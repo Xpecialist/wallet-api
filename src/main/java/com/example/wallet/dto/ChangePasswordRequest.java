@@ -10,5 +10,5 @@ import jakarta.validation.constraints.Size;
  * @param newPassword     the new raw password, 8 to 72 characters and at most 72 bytes in UTF-8
  */
 public record ChangePasswordRequest(
-        @NotBlank String currentPassword,
+        @NotBlank @MaxUtf8Bytes(72) String currentPassword,
         @NotBlank @Size(min = 8, max = 72) @MaxUtf8Bytes(72) String newPassword) {}

@@ -14,4 +14,4 @@ import java.math.BigDecimal;
  */
 public record CreateDepositRequest(
         @NotNull @DecimalMin("0.0001") @Digits(integer = 15, fraction = 4) BigDecimal amount,
-        @Size(max = 255) String note) {}
+        @Size(max = 255) @PlainText String note) {}

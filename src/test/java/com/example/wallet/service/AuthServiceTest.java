@@ -105,6 +105,20 @@ class AuthServiceTest {
     }
 
     @Test
+    void loginRejectsPasswordsOver72BytesWithBadCredentialsAndNeverTruncates() {
+        // 73 ASCII bytes, and 37 two-byte characters (74 bytes but only 37 chars)
+        for (String pw : new String[] {"a".repeat(73), "\u00E9".repeat(37)}) {
+            assertThatThrownBy(() -> service.login(new LoginRequest("alice", pw)))
+                    .isInstanceOf(BadCredentialsException.class);
+        }
+        verify(authManager, never()).authenticate(any());
+        verify(jwt, never()).generateToken(any());
+        // exactly 72 bytes still goes to the authentication manager
+        assertThat(service.login(new LoginRequest("alice", "a".repeat(72))).token()).isEqualTo("tok");
+        assertThat(service.login(new LoginRequest("alice", "\u00E9".repeat(36))).token()).isEqualTo("tok");
+    }
+
+    @Test
     void loginPropagatesDisabledAccountAndIssuesNoToken() {
         doThrow(new DisabledException("off")).when(authManager).authenticate(any());
         assertThatThrownBy(() -> service.login(new LoginRequest("alice", "pw"))).isInstanceOf(DisabledException.class);

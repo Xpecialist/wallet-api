@@ -141,3 +141,19 @@ No critical or high findings. I could not steal money, escalate privileges, read
 
 ## Cleanup
 My 8081 instance (java PID 20232) was stopped. Port 8080 was verified still listening afterwards. `git status` shows no changes in the repo (scripts and outputs are in the scratchpad). `walletdb_test` was left with the test data; `walletdb` and `walletdb_old_backup_20261021` were never connected to.
+
+## Status after round 2 (see SECURITY_FIXES_ROUND2_LOG.md)
+| # | Status |
+|---|---|
+| F1 | Fixed earlier (`server.address=127.0.0.1` in the dev profile) |
+| F2 | Fixed (NUL rejected with 400 by validation; SQLState 22021 also mapped to 400) |
+| F3 | Fixed (password compared before the enabled flag) |
+| F4 | Fixed (offset above int range gives 400 on all paged endpoints) |
+| F5 | Fixed (dates limited to 1900-01-01 .. 2200-12-31, else 400) |
+| F6 | Fixed (direct `/error` is 401/403, never 500) |
+| F7 | Fixed (multipart disabled, 415) |
+| F8 | Fixed (ASCII-only usernames; control/format/bidi characters rejected in notes and email) |
+| F9 | Partly fixed (identical "Receiver not found"); existence via success/failure accepted as inherent |
+| F10 | Fixed at login (over 72 bytes gives 401); library fix still comes with M5 |
+| F11 | Open: only major upgrades fix the advisories; documented, `npm audit` unchanged |
+| F12 | Unchanged (info) |

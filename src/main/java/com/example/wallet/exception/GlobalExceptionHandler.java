@@ -80,8 +80,9 @@ public class GlobalExceptionHandler {
     /**
      * Handles database constraint violations by SQLState. A unique violation (23505, e.g. a racing duplicate
      * registration or a simultaneous idempotent replay) is a 409. Out-of-range or too-long values (22003, 22001)
-     * are a 400. Anything else (CHECK, foreign key, NOT NULL) indicates a bug, so it is logged and returned as 500
-     * instead of being disguised as a conflict.
+     * are a 400, and so is text the database cannot store (22021, a NUL character that got past request validation,
+     * for example in a query parameter). Anything else (CHECK, foreign key, NOT NULL) indicates a bug, so it is logged
+     * and returned as 500 instead of being disguised as a conflict.
      *
      * @param e the exception
      * @return a 409, 400 or 500 response with a generic message
@@ -90,6 +91,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, Object>> integrity(DataIntegrityViolationException e) {
         String state = sqlState(e);
         if (state == null || state.equals("23505")) return body(HttpStatus.CONFLICT, "Data conflict");
+        if (state.equals("22021")) return body(HttpStatus.BAD_REQUEST, "Input contains an invalid character");
         if (state.equals("22003") || state.equals("22001")) {
             return body(HttpStatus.BAD_REQUEST, "Value out of range or too long");
         }

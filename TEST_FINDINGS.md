@@ -163,3 +163,6 @@ Not done: M1, M5, M6, M7, L4, L8-L11. Results: `mvn verify` 159 unit + 108 integ
 
 ## Deposit requests with admin approval (2026-10-21): see DEPOSIT_REQUESTS_LOG.md
 The later task from round 1 is done: users request a deposit, an admin approves or rejects; approval credits the wallet exactly once (request row lock + status re-check + wallet lock). `mvn verify` 174 unit + 133 integration tests, frontend 217 tests, `npm run build` ok. Open items and risks are listed in the log.
+
+## Round 2 security fixes (2026-10-23): see SECURITY_FIXES_ROUND2_LOG.md
+Attack-pass findings F2-F10 fixed (F9 partly; accepted remainder explained), F11 (npm audit) documented but open because every fix is a major upgrade. Results: `mvn verify` 221 unit + 151 integration tests, frontend 218 tests, `npm run build` ok.

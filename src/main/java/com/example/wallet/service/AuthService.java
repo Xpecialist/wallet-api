@@ -11,9 +11,11 @@ import com.example.wallet.repository.UserRepository;
 import com.example.wallet.repository.WalletRepository;
 import com.example.wallet.security.JwtService;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -127,10 +129,15 @@ public class AuthService {
      *
      * @param req the login data
      * @return a response containing a JWT
-     * @throws org.springframework.security.core.AuthenticationException if the credentials are wrong or the account is
-     *         disabled (both mapped to the same 401 by {@code GlobalExceptionHandler})
+     * @throws org.springframework.security.core.AuthenticationException if the credentials are wrong (including a
+     *         password over 72 bytes) or the account is disabled (all mapped to the same 401 by {@code GlobalExceptionHandler})
      */
     public AuthResponse login(LoginRequest req) {
+        // BCrypt only reads the first 72 bytes, so a longer password would match by its prefix. Passwords over 72 bytes
+        // cannot be registered, so none can be correct: same 401 as any other failure, never truncated.
+        if (req.password().getBytes(StandardCharsets.UTF_8).length > 72) {
+            throw new BadCredentialsException("Password too long");
+        }
         Authentication auth = authManager.authenticate(
                 new UsernamePasswordAuthenticationToken(req.username().trim(), req.password()));
         return new AuthResponse(jwt.generateToken(auth.getName()));
