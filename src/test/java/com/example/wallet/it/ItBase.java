@@ -6,8 +6,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 
 import com.example.wallet.entity.Role;
 import com.example.wallet.service.AuthService;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.util.LinkedHashMap;
@@ -15,7 +15,7 @@ import java.util.Map;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -39,7 +39,7 @@ abstract class ItBase {
     @Autowired protected MockMvc mvc;
     @Autowired protected JdbcTemplate jdbc;
     @Autowired protected DataSource dataSource;
-    @Autowired protected ObjectMapper json;
+    @Autowired protected JsonMapper json;
     @Autowired protected AuthService authService;
 
     @BeforeEach

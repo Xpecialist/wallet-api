@@ -2,6 +2,7 @@ package com.example.wallet.security;
 
 import com.example.wallet.repository.UserRepository;
 import jakarta.servlet.DispatcherType;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
@@ -83,6 +84,21 @@ public class SecurityConfig {
     }
 
     /**
+     * Stops Spring Boot from also registering {@link JwtAuthFilter} (a {@code @Component}) as a plain servlet filter.
+     * It must only run inside the security filter chain: outside it, the authentication it sets is discarded when the
+     * chain starts a fresh security context, and in tests (MockMvc) every authenticated request would answer 401.
+     *
+     * @param filter the JWT filter bean
+     * @return a disabled servlet registration for it
+     */
+    @Bean
+    public FilterRegistrationBean<JwtAuthFilter> jwtAuthFilterRegistration(JwtAuthFilter filter) {
+        FilterRegistrationBean<JwtAuthFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
+    /**
      * Password check for login. Spring's default provider tests the enabled flag BEFORE the password, so a wrong
      * password on a disabled account answered in about 2 ms instead of the ~75 ms of a BCrypt comparison (a timing
      * oracle for disabled accounts). Here the pre-checks are empty and the disabled check runs after the password
@@ -95,8 +111,7 @@ public class SecurityConfig {
     @Bean
     public DaoAuthenticationProvider authenticationProvider(UserDetailsService userDetailsService,
                                                             PasswordEncoder passwordEncoder) {
-        DaoAuthenticationProvider p = new DaoAuthenticationProvider();
-        p.setUserDetailsService(userDetailsService);
+        DaoAuthenticationProvider p = new DaoAuthenticationProvider(userDetailsService);
         p.setPasswordEncoder(passwordEncoder);
         p.setPreAuthenticationChecks(user -> { });
         p.setPostAuthenticationChecks(user -> {

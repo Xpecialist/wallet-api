@@ -255,7 +255,7 @@ class SecurityRound2IT extends ItBase {
         for (MvcResult r : new MvcResult[] {byName, low, high}) {
             assertStatus(r, 404);
             assertThat(body(r).get("error").asText()).isEqualTo("Receiver not found");
-            assertThat(body(r).fieldNames()).toIterable().containsExactly("timestamp", "status", "error");
+            assertThat(body(r).propertyNames()).containsExactly("timestamp", "status", "error");
         }
         assertThat(balance("alice")).isEqualByComparingTo("10");
     }

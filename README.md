@@ -1,6 +1,6 @@
 # wallet-api
 
-A simple digital wallet REST API built with Spring Boot 3.3, Java 17, Maven and PostgreSQL.
+A simple digital wallet REST API built with Spring Boot 4.1, Java 17, Maven and PostgreSQL.
 
 ## Features
 

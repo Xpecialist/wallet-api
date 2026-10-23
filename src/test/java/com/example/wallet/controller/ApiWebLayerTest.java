@@ -36,8 +36,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -60,11 +60,11 @@ import org.springframework.test.web.servlet.MockMvc;
 class ApiWebLayerTest {
     @Autowired MockMvc mvc;
     @Autowired JwtService jwt;
-    @MockBean UserRepository userRepository;
-    @MockBean AuthService authService;
-    @MockBean UserService userService;
-    @MockBean WalletService walletService;
-    @MockBean TransactionService transactionService;
+    @MockitoBean UserRepository userRepository;
+    @MockitoBean AuthService authService;
+    @MockitoBean UserService userService;
+    @MockitoBean WalletService walletService;
+    @MockitoBean TransactionService transactionService;
 
     @BeforeEach
     void users() {
