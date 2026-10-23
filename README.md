@@ -58,6 +58,10 @@ $env:ADMIN_PASSWORD = "choose-a-dev-password"   # at least 12 characters; needed
 mvn spring-boot:run "-Dspring-boot.run.profiles=dev"
 ```
 
+The `dev` profile also binds the server to `127.0.0.1`, so only the same machine can reach it. To reach it from another
+machine, set `SERVER_ADDRESS=0.0.0.0` together with your own private `JWT_SECRET` (never the public dev one), start Vite
+with `--host`, and allow ports 8080 and 5173 in the firewall.
+
 Without the profile and without `JWT_SECRET` the app stops at startup with a clear message. For a real run set a secret
 instead (generate one, for example, with `[Convert]::ToBase64String((1..48 | % { Get-Random -Max 256 }))`):
 
