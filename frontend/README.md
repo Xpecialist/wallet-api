@@ -5,7 +5,7 @@ filterable history, profile, wallet lookup and an admin section (visible to the 
 
 ## Prerequisites
 
-- Node 18+ and npm
+- Node 20.19+ or 22.12+ (required by Vite 8; Vitest 5 needs 22.12+ or 24+) and npm
 - The backend running on `http://localhost:8080` (see the root `README.md`; set `ADMIN_PASSWORD` to get an admin user)
 
 ## Install and run
