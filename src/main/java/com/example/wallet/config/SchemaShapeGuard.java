@@ -31,7 +31,7 @@ public class SchemaShapeGuard {
                 verify(jdbc, "Refusing to baseline Flyway on an existing database that is not at the current schema");
             }
             flyway.migrate();
-            verify(jdbc, "Database schema does not match the Flyway migrations");
+            verifyCurrent(jdbc, "Database schema does not match the Flyway migrations");
         };
     }
 
@@ -41,9 +41,23 @@ public class SchemaShapeGuard {
                 Boolean.class, name));
     }
 
-    /** Throws IllegalStateException listing every missing table, index or constraint. */
+    /** Throws IllegalStateException listing every missing table, index or constraint of the V1 shape (the baseline check). */
     public static void verify(JdbcTemplate jdbc, String headline) {
+        check(jdbc, headline, false);
+    }
+
+    /** Like {@link #verify} plus what V2 adds ({@code users.token_version}); used after every migration. */
+    public static void verifyCurrent(JdbcTemplate jdbc, String headline) {
+        check(jdbc, headline, true);
+    }
+
+    private static void check(JdbcTemplate jdbc, String headline, boolean current) {
         List<String> problems = new ArrayList<>();
+        if (current && jdbc.queryForObject("select count(*) from information_schema.columns where table_schema = "
+                + "current_schema() and table_name = 'users' and column_name = 'token_version' "
+                + "and data_type = 'bigint' and is_nullable = 'NO'", Long.class) == 0) {
+            problems.add("missing column users.token_version (BIGINT NOT NULL)");
+        }
         for (String t : TABLES) {
             if (!hasTable(jdbc, t)) problems.add("missing table " + t);
         }

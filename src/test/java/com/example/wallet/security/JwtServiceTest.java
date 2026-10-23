@@ -22,12 +22,12 @@ class JwtServiceTest {
 
     @Test
     void roundTripReturnsSubject() {
-        assertThat(jwt.extractUsername(jwt.generateToken("alice"))).isEqualTo("alice");
+        assertThat(jwt.extractUsername(jwt.generateToken("alice", 0L))).isEqualTo("alice");
     }
 
     @Test
     void tokenHasIssuedAtAndExpiryMatchingConfiguredLifetime() {
-        String token = jwt.generateToken("alice");
+        String token = jwt.generateToken("alice", 0L);
         SecretKey key = Keys.hmacShaKeyFor(Decoders.BASE64.decode(SECRET));
         var claims = Jwts.parser().verifyWith(key).build().parseSignedClaims(token).getPayload();
         assertThat(claims.getExpiration().getTime() - claims.getIssuedAt().getTime()).isEqualTo(60_000);
@@ -36,19 +36,19 @@ class JwtServiceTest {
     @Test
     void expiredTokenIsRejected() {
         JwtService shortLived = new JwtService(SECRET, -1_000);
-        String token = shortLived.generateToken("alice");
+        String token = shortLived.generateToken("alice", 0L);
         assertThatThrownBy(() -> jwt.extractUsername(token)).isInstanceOf(ExpiredJwtException.class);
     }
 
     @Test
     void tokenSignedWithDifferentKeyIsRejected() {
-        String token = new JwtService(OTHER_SECRET, 60_000).generateToken("alice");
+        String token = new JwtService(OTHER_SECRET, 60_000).generateToken("alice", 0L);
         assertThatThrownBy(() -> jwt.extractUsername(token)).isInstanceOf(JwtException.class);
     }
 
     @Test
     void tamperedPayloadIsRejected() {
-        String[] parts = jwt.generateToken("alice").split("\\.");
+        String[] parts = jwt.generateToken("alice", 0L).split("\\.");
         String forgedPayload = Base64.getUrlEncoder().withoutPadding()
                 .encodeToString("{\"sub\":\"admin\",\"exp\":9999999999}".getBytes());
         String forged = parts[0] + "." + forgedPayload + "." + parts[2];
@@ -79,5 +79,40 @@ class JwtServiceTest {
         assertThatThrownBy(() -> new JwtService(null, 1000)).isInstanceOf(MissingJwtSecretException.class);
         assertThatThrownBy(() -> new JwtService("", 1000)).isInstanceOf(MissingJwtSecretException.class);
         assertThatThrownBy(() -> new JwtService("   ", 1000)).isInstanceOf(MissingJwtSecretException.class);
+    }
+
+    @Test
+    void tokenCarriesTheVersionInTheTvClaimAndParseReturnsIt() {
+        String token = jwt.generateToken("alice", 7L);
+        SecretKey key = Keys.hmacShaKeyFor(Decoders.BASE64.decode(SECRET));
+        var claims = Jwts.parser().verifyWith(key).build().parseSignedClaims(token).getPayload();
+        assertThat(claims.get("tv", Long.class)).isEqualTo(7L);
+        assertThat(jwt.parse(token)).isEqualTo(new JwtService.TokenClaims("alice", 7L));
+        assertThat(jwt.parse(jwt.generateToken("alice", 0L)).tokenVersion()).isZero();
+    }
+
+    @Test
+    void tokenWithoutTvClaimParsesWithNullVersion() {
+        SecretKey key = Keys.hmacShaKeyFor(Decoders.BASE64.decode(SECRET));
+        String legacy = Jwts.builder().subject("alice").issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + 60_000)).signWith(key).compact();
+        assertThat(jwt.parse(legacy)).isEqualTo(new JwtService.TokenClaims("alice", null));
+    }
+
+    @Test
+    void nonNumericTvClaimParsesAsNull() {
+        SecretKey key = Keys.hmacShaKeyFor(Decoders.BASE64.decode(SECRET));
+        String odd = Jwts.builder().subject("alice").claim("tv", "3")
+                .expiration(new Date(System.currentTimeMillis() + 60_000)).signWith(key).compact();
+        assertThat(jwt.parse(odd).tokenVersion()).isNull();
+    }
+
+    @Test
+    void parseStillRejectsExpiredForgedAndGarbageTokens() {
+        String expired = new JwtService(SECRET, -1_000).generateToken("alice", 0L);
+        assertThatThrownBy(() -> jwt.parse(expired)).isInstanceOf(ExpiredJwtException.class);
+        String foreign = new JwtService(OTHER_SECRET, 60_000).generateToken("alice", 0L);
+        assertThatThrownBy(() -> jwt.parse(foreign)).isInstanceOf(JwtException.class);
+        assertThatThrownBy(() -> jwt.parse("not-a-jwt")).isInstanceOf(JwtException.class);
     }
 }

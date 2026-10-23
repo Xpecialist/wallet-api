@@ -18,7 +18,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
 /**
  * Servlet filter that authenticates requests carrying an {@code Authorization: Bearer <jwt>} header. A valid
  * token whose user still exists and is enabled puts an authentication (with the user's current role from the
- * database) into the security context; tokens of disabled users are rejected. A missing or invalid token is silently ignored, leaving the request unauthenticated so that
+ * database) into the security context; tokens of disabled users are rejected, and so are tokens whose {@code tv}
+ * claim is missing or differs from the user's stored token version (revoked by logout, password change or
+ * disabling). A missing or invalid token is silently ignored, leaving the request unauthenticated so that
  * {@link SecurityConfig} rejects it with 401 if the endpoint requires authentication.
  */
 @Component
@@ -53,9 +55,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         if (header != null && header.startsWith("Bearer ")
                 && SecurityContextHolder.getContext().getAuthentication() == null) {
             try {
-                String username = jwtService.extractUsername(header.substring(7));
-                UserDetails user = userDetailsService.loadUserByUsername(username);
-                if (user.isEnabled()) {
+                JwtService.TokenClaims claims = jwtService.parse(header.substring(7));
+                UserDetails user = userDetailsService.loadUserByUsername(claims.username());
+                // Revocation: the token is valid only while its tv claim equals the stored token version. A missing
+                // claim (token issued before revocation existed) or any other value is rejected like an invalid token.
+                if (user.isEnabled() && user instanceof AuthUser stored && claims.tokenVersion() != null
+                        && claims.tokenVersion() == stored.getTokenVersion()) {
                     var auth = new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
                     auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                     SecurityContextHolder.getContext().setAuthentication(auth);

@@ -14,6 +14,7 @@ A simple digital wallet REST API built with Spring Boot 4.1, Java 17, Maven and 
 - Optional note on transfers
 - Paginated, sortable, filterable transaction history and admin lists
 - Profile management (view, change email, change password); admins can disable and enable users
+- Token revocation: logout (all devices), password change and admin disable invalidate existing tokens
 - Admin endpoints to list all users and all transactions
 - Optional idempotency keys on transfers, deposits and withdrawals (scoped per user; a repeat must be the same request)
 
@@ -98,9 +99,9 @@ Then open `http://localhost:5173`. The dev server proxies `/api` to the backend.
 
 ## Data model
 
-Created by the Flyway migration `src/main/resources/db/migration/V1__baseline.sql` (see [Database schema](#database-schema-flyway)).
+Created by the Flyway migrations `V1__baseline.sql` and `V2__user_token_version.sql` in `src/main/resources/db/migration` (see [Database schema](#database-schema-flyway)).
 
-**users**: `id`, `username` (unique, also case-insensitively via `uq_users_username_lower`), `email` (unique, also case-insensitively via `uq_users_email_lower`), `password_hash` (BCrypt), `role` (`USER` or `ADMIN`, default `USER`), `enabled` (boolean, default true), `created_at`
+**users**: `id`, `username` (unique, also case-insensitively via `uq_users_username_lower`), `email` (unique, also case-insensitively via `uq_users_email_lower`), `password_hash` (BCrypt), `role` (`USER` or `ADMIN`, default `USER`), `enabled` (boolean, default true), `token_version` (BIGINT, default 0; see [Token revocation](#token-revocation)), `created_at`
 
 **wallets**: `id`, `user_id` (unique, FK to users), `balance` (`NUMERIC(19,4)`, check >= 0), `currency`, `version` (optimistic locking)
 
@@ -117,9 +118,9 @@ A check constraint ties the type to the wallets: a transfer has both wallets, a 
 
 ## Database schema (Flyway)
 
-Flyway owns the schema. Migrations live in `src/main/resources/db/migration` and run at startup, each exactly once; applied versions are recorded in the table `flyway_schema_history`. Hibernate only validates the result (`spring.jpa.hibernate.ddl-auto=validate`). `V1__baseline.sql` is the complete current schema (users, wallets, transactions, deposit_requests with all constraints and indexes).
+Flyway owns the schema. Migrations live in `src/main/resources/db/migration` and run at startup, each exactly once; applied versions are recorded in the table `flyway_schema_history`. Hibernate only validates the result (`spring.jpa.hibernate.ddl-auto=validate`). `V1__baseline.sql` is the baseline schema (users, wallets, transactions, deposit_requests with all constraints and indexes); `V2__user_token_version.sql` adds `users.token_version`.
 
-**Changing the schema.** Add a new file `V2__short_description.sql` (next number, two underscores, plain SQL) next to V1 and update the entities. NEVER edit or rename a migration that has been applied anywhere: Flyway validates checksums at startup and refuses to start if an applied file changed. To fix a mistake, add a new migration.
+**Changing the schema.** Add a new file `V3__short_description.sql` (next number, two underscores, plain SQL) next to V1 and V2 and update the entities. NEVER edit or rename a migration that has been applied anywhere: Flyway validates checksums at startup and refuses to start if an applied file changed. To fix a mistake, add a new migration.
 
 **Existing databases.** A database created by the previous code (`schema.sql` at every start) has the V1 shape but no `flyway_schema_history`. With `spring.flyway.baseline-on-migrate=true` and `baseline-version=1`, Flyway records it as "already at version 1" and does not run V1 again; later migrations then apply normally. An EMPTY database is never baselined: it runs V1 in full. Because a baseline skips V1, the database must really be at the current shape. On such a database the app first checks the tables, indexes and constraints that V1 defines (`SchemaShapeGuard`) and refuses to start, listing what is missing, if it is older. Supported paths for an older database: first start the previous version of the app once so its `schema.sql` upgrades it to the current shape, or recreate the database. (The same check also runs after every migration, so a dropped index or constraint stops startup.)
 
@@ -127,12 +128,13 @@ Flyway owns the schema. Migrations live in `src/main/resources/db/migration` and
 
 ## API
 
-Send `Authorization: Bearer <token>` on every endpoint except `/api/auth/**`.
+Send `Authorization: Bearer <token>` on every endpoint except `/api/auth/register` and `/api/auth/login`.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | POST | `/api/auth/register` | public | Register a user (role USER) with a wallet; returns a token |
 | POST | `/api/auth/login` | public | Log in; returns a token |
+| POST | `/api/auth/logout` | any user | Log out of ALL devices: revokes every token of the caller (see [Token revocation](#token-revocation)); returns 204 |
 | GET | `/api/wallets/me` | any user | Your wallet |
 | GET | `/api/wallets/{id}` | owner or admin | A wallet by id (404 for anyone else, same as a missing wallet) |
 | POST | `/api/wallets/me/withdraw` | any user | Withdraw from your wallet (simulated); 422 if funds are insufficient; optional `Idempotency-Key` header |
@@ -141,7 +143,7 @@ Send `Authorization: Bearer <token>` on every endpoint except `/api/auth/**`.
 | GET | `/api/transactions/{id}` | sender, receiver or admin | A transaction by id (404 for anyone else, same as a missing one) |
 | GET | `/api/users/me` | any user | Your profile |
 | PATCH | `/api/users/me` | any user | Change your email (validated, must be unique) |
-| POST | `/api/users/me/password` | any user | Change your password (verifies the current one); returns 204 |
+| POST | `/api/users/me/password` | any user | Change your password (verifies the current one); revokes all older tokens and returns 200 with a NEW token |
 | GET | `/api/admin/users` | ADMIN | Users, paged and sortable (default sort `id`) |
 | PATCH | `/api/admin/users/{id}/status` | ADMIN | Enable or disable a user |
 | GET | `/api/admin/transactions` | ADMIN | All transactions; same paging, sorting and filters as `/api/transactions` |
@@ -240,7 +242,7 @@ Profile:
 ```json
 GET /api/users/me  ->  { "id": 2, "username": "alice", "email": "alice@example.com", "role": "USER", "enabled": true, "createdAt": "2026-10-16T02:11:13.591" }
 PATCH /api/users/me          { "email": "alice2@example.com" }   (409 if the email is taken)
-POST /api/users/me/password  { "currentPassword": "password123", "newPassword": "newpassword1" }   (400 if the current password is wrong or the new one is the same; 204 on success)
+POST /api/users/me/password  { "currentPassword": "password123", "newPassword": "newpassword1" }   (400 if the current password is wrong or the new one is the same; 200 with `{"token": ..., "tokenType": "Bearer"}` on success: use this token from now on, the old one and the tokens of other devices are revoked)
 ```
 
 Enable or disable a user (admin; returns the updated user, 400 if an admin disables their own account):
@@ -300,7 +302,8 @@ curl localhost:8080/api/users/me -H "Authorization: Bearer $TOKEN"
 curl -X PATCH localhost:8080/api/users/me -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"email":"alice2@example.com"}'
 curl -X POST localhost:8080/api/users/me/password -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"currentPassword":"password123","newPassword":"newpassword1"}'
+  -d '{"currentPassword":"password123","newPassword":"newpassword1"}'   # returns a new token; the old $TOKEN no longer works
+curl -X POST localhost:8080/api/auth/logout -H "Authorization: Bearer $TOKEN"   # 204; revokes all tokens of this user
 
 # Admin (start the app with ADMIN_PASSWORD set, at least 12 characters, then log in as admin)
 curl -X POST localhost:8080/api/auth/login -H "Content-Type: application/json" \
@@ -316,14 +319,26 @@ curl -X PATCH localhost:8080/api/admin/users/2/status -H "Authorization: Bearer 
 
 On Windows PowerShell use `curl.exe` and single-quoted JSON, or `Invoke-RestMethod`.
 
+## Token revocation
+
+Every user has a `token_version` (`users.token_version`, BIGINT, starts at 0). A token carries the version that was current when it was issued in the claim `tv`. `JwtAuthFilter` already loads the user from the database on every request, and compares the claim with the stored value in that same load (no extra query): a token whose `tv` is missing or different is rejected with 401, exactly like an invalid token.
+
+The version is increased with one atomic `UPDATE users SET token_version = token_version + 1` (no read-modify-write, so concurrent bumps are never lost) when:
+
+- the user logs out: `POST /api/auth/logout` (authenticated, returns 204) revokes every token of that user on ALL devices, the one used for the call included;
+- the user changes the password: the other sessions die, and the response (200) contains a NEW token for the new version so the current session keeps working; the old token no longer works;
+- an admin DISABLES the user (the existing disabled rejection stays; re-enabling does not bump, but the old tokens stay dead, so the user must log in again).
+
+There is no endpoint that changes a role, so there is nothing to bump there yet; a future role change must call `UserRepository.bumpTokenVersion` too. Login and registration issue tokens with the current version. Tokens issued before this feature have no `tv` claim and are rejected: users simply log in again. Logging out is therefore "log out everywhere"; there is no per-device logout. Tokens are still short-lived (1 hour). Details: `TOKEN_REVOCATION_LOG.md`.
+
 ## Design notes
 
-- **JWT auth.** Tokens are HMAC-signed with the Base64 secret in `app.jwt.secret`, with the username as subject plus issued-at and expiry. `JwtAuthFilter` validates the bearer token and loads the user (and current role) from the database on each request. Sessions and CSRF are disabled. Missing or invalid tokens leave the request unauthenticated; protected endpoints then return 401. Authenticated non-admins on `/api/admin/**` get 403. The container's error forward to `/error` is public (dispatcher type ERROR) so error forwards keep their real status; a direct request to `/error` is denied (401/403), never a 500. Multipart is disabled (no uploads), so `multipart/form-data` gets 415. Login compares the password before checking the disabled flag (no timing difference) and treats passwords over 72 bytes as wrong.
+- **JWT auth.** Tokens are HMAC-signed with the Base64 secret in `app.jwt.secret`, with the username as subject, the user's token version (`tv`, see [Token revocation](#token-revocation)) plus issued-at and expiry. `JwtAuthFilter` validates the bearer token and loads the user (and current role) from the database on each request. Sessions and CSRF are disabled. Missing or invalid tokens leave the request unauthenticated; protected endpoints then return 401. Authenticated non-admins on `/api/admin/**` get 403. The container's error forward to `/error` is public (dispatcher type ERROR) so error forwards keep their real status; a direct request to `/error` is denied (401/403), never a 500. Multipart is disabled (no uploads), so `multipart/form-data` gets 415. Login compares the password before checking the disabled flag (no timing difference) and treats passwords over 72 bytes as wrong.
 - **Transfers** run in one database transaction. Both wallet rows are locked with `SELECT ... FOR UPDATE`, always in ascending wallet id order, so opposite transfers cannot deadlock. Wallets also have a `@Version` column as an optimistic-locking safeguard. The balance check requires `balance >= amount`; the currencies of both wallets must match.
 - **Idempotency.** Keys are scoped to the owning wallet (the sender; for a deposit the receiver), so different users can use the same key string independently. If a key was already used by the same owner AND the request is the same (same type, receiver, amount and note for a transfer; same amount for a deposit or withdrawal), the original transaction is returned and nothing is applied. The same key with any difference, or for another operation type, gives 409 "Idempotency key already used with a different request". The header must be 1 to 100 characters (blank or longer gives 400); an absent header means no key. Known limitation: if the same request is sent twice at the same moment, all but one of the simultaneous requests get 409 instead of the original transaction (money still moves exactly once).
 - **Deposits and withdrawals** lock the wallet row (`SELECT ... FOR UPDATE`) while the balance changes. A withdrawal requires `balance >= amount` (422 otherwise). Both are simulated; no payment provider is involved.
 - **Deposit requests.** Creating a request moves no money. Approval runs in one database transaction: the request row is locked (`SELECT ... FOR UPDATE`) and its status re-checked under the lock, then the wallet row is locked with `findByIdForUpdate`, the balance credited, a COMPLETED DEPOSIT transaction saved and the request set to APPROVED with `transaction_id`. Concurrent or repeated approve/reject calls wait on the row lock and then get 409, so the wallet is credited exactly once (a unique index on `transaction_id` is a last safety net). The lock order (request, then wallet) cannot deadlock with transfers, which lock wallets only. Creating a request locks the caller's own wallet row briefly, which makes the pending cap and the idempotency check race-free per user. See `DEPOSIT_REQUESTS_LOG.md`.
-- **Disabled users.** `enabled=false` makes the login fail with the same 401 as a wrong password and makes the JWT filter ignore the user's tokens, so their requests get 401.
+- **Disabled users.** `enabled=false` makes the login fail with the same 401 as a wrong password and makes the JWT filter ignore the user's tokens, so their requests get 401. Disabling also bumps the token version (see [Token revocation](#token-revocation)).
 - **Paging.** Handled by Spring Data's `Pageable` argument resolver; the size cap is `spring.data.web.pageable.max-page-size=100`. Transaction filters are built as JPA `Specification`s.
 - **Access rules.** A wallet is visible to its owner and admins. A transaction is visible to the owners of its sender and receiver wallets and admins. Anyone else gets 404, the same as for a missing id. Registration always creates role USER.
 - **Admin bootstrap.** At startup, if `ADMIN_PASSWORD` (`app.admin.password`) is non-empty (and at least 12 characters, at most 72 bytes) and no user named `app.admin.username` exists, an ADMIN user and wallet are created. An existing account is never modified. The admin username and email are reserved against registration. If the password is too weak, or the username or email is already taken by another account, an error is logged and the admin is not created, but the app still starts.
@@ -353,5 +368,5 @@ wallet-api
 ## Status and limitations
 
 - Automated tests: `mvn test` (unit, no database), `mvn verify` (also the integration tests against a separate empty database `walletdb_test`), `cd frontend && npm test`. See `TEST_FINDINGS.md`, `SECURITY_FIXES_LOG.md`.
-- Not done yet (see `TEST_FINDINGS.md`): rate limiting, DB credential hardening, token revocation on password change.
+- Not done yet (see `TEST_FINDINGS.md`): rate limiting, DB credential hardening.
 - Defaults are for local development only: the `postgres`/`postgres` database credentials and the plain JDBC URL. There is no default JWT secret.

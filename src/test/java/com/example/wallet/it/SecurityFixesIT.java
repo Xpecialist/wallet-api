@@ -124,7 +124,7 @@ class SecurityFixesIT extends ItBase {
                 .getResponse().getStatus()).as("new equals current").isEqualTo(400);
         assertThat(login("alice", ok72)).isNotBlank(); // still the old password
         assertThat(postJson("/api/users/me/password", token, map("currentPassword", ok72, "newPassword", "Another-Pass1"),
-                null).getResponse().getStatus()).isEqualTo(204);
+                null).getResponse().getStatus()).isEqualTo(200);
     }
 
     // ---- L5: reserved admin identity and bootstrap ------------------------------------------------------------

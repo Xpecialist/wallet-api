@@ -1,11 +1,11 @@
 package com.example.wallet.controller;
 
+import com.example.wallet.dto.AuthResponse;
 import com.example.wallet.dto.ChangePasswordRequest;
 import com.example.wallet.dto.UpdateProfileRequest;
 import com.example.wallet.dto.UserResponse;
 import com.example.wallet.service.UserService;
 import jakarta.validation.Valid;
-import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
@@ -45,12 +45,11 @@ public class UserController {
      *
      * @param req  the current and new passwords
      * @param auth the authenticated caller
-     * @return 204 with no body (errors: 400 on validation failure or wrong current password,
-     *         401 if not authenticated)
+     * @return 200 with a NEW token; all older tokens (this one included, and those of other devices) stop working
+     *         (errors: 400 on validation failure or wrong current password, 401 if not authenticated)
      */
     @PostMapping("/password")
-    public ResponseEntity<Void> changePassword(@Valid @RequestBody ChangePasswordRequest req, Authentication auth) {
-        userService.changePassword(auth.getName(), req);
-        return ResponseEntity.noContent().build();
+    public AuthResponse changePassword(@Valid @RequestBody ChangePasswordRequest req, Authentication auth) {
+        return userService.changePassword(auth.getName(), req);
     }
 }

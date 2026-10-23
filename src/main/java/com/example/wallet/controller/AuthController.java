@@ -7,9 +7,10 @@ import com.example.wallet.service.AuthService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
-/** Public endpoints under {@code /api/auth} for registration and login. */
+/** Endpoints under {@code /api/auth}: public registration and login, authenticated logout. */
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -39,5 +40,18 @@ public class AuthController {
     @PostMapping("/login")
     public AuthResponse login(@Valid @RequestBody LoginRequest req) {
         return authService.login(req);
+    }
+
+    /**
+     * {@code POST /api/auth/logout}. Authenticated. Logs the caller out of ALL devices by revoking every token
+     * issued so far (the token used for this call included).
+     *
+     * @param auth the authenticated caller
+     * @return 204 with no body (errors: 401 if not authenticated or the token is already revoked)
+     */
+    @PostMapping("/logout")
+    public ResponseEntity<Void> logout(Authentication auth) {
+        authService.logout(auth.getName());
+        return ResponseEntity.noContent().build();
     }
 }

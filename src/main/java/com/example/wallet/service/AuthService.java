@@ -9,6 +9,7 @@ import com.example.wallet.entity.Wallet;
 import com.example.wallet.exception.ApiException;
 import com.example.wallet.repository.UserRepository;
 import com.example.wallet.repository.WalletRepository;
+import com.example.wallet.security.AuthUser;
 import com.example.wallet.security.JwtService;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -81,7 +82,7 @@ public class AuthService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "username: size must be between 3 and 50");
         }
         User u = createUser(username, req.email(), req.password(), Role.USER);
-        return new AuthResponse(jwt.generateToken(u.getUsername()));
+        return new AuthResponse(jwt.generateToken(u.getUsername(), u.getTokenVersion()));
     }
 
     /**
@@ -140,6 +141,21 @@ public class AuthService {
         }
         Authentication auth = authManager.authenticate(
                 new UsernamePasswordAuthenticationToken(req.username().trim(), req.password()));
-        return new AuthResponse(jwt.generateToken(auth.getName()));
+        // the version comes from the same load that checked the password, so a change in between can only make the
+        // new token stale (rejected), never valid for an old password
+        if (!(auth.getPrincipal() instanceof AuthUser stored)) throw new IllegalStateException("Unexpected principal");
+        long version = stored.getTokenVersion();
+        return new AuthResponse(jwt.generateToken(auth.getName(), version));
+    }
+
+    /**
+     * Logs the user out of every device: bumps the token version with one atomic UPDATE, so all tokens issued so
+     * far (this one included) are rejected from the next request on.
+     *
+     * @param username the authenticated user
+     */
+    @Transactional
+    public void logout(String username) {
+        users.findByUsername(username).ifPresent(u -> users.bumpTokenVersion(u.getId()));
     }
 }

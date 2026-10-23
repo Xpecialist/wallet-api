@@ -1,7 +1,7 @@
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { getToken } from '../src/api/client.js';
+import { getToken, setToken } from '../src/api/client.js';
 import { ADMIN, USER, authedHandlers, mockFetch, renderApp, res } from './helpers.jsx';
 
 describe('login', () => {
@@ -196,6 +196,68 @@ describe('session restore, logout and expiry', () => {
     expect(await screen.findByRole('heading', { name: 'Log in' })).toBeInTheDocument();
     expect(getToken()).toBeNull();
     expect(sessionStorage.getItem('wallet.token')).toBeNull();
+  });
+  it('log out calls POST /api/auth/logout with the current token, then clears the token and redirects', async () => {
+    const f = mockFetch({ ...authedHandlers(), 'POST /api/auth/logout': res(204) });
+    renderApp('/', { token: 'stored' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Log out' }));
+    expect(await screen.findByRole('heading', { name: 'Log in' })).toBeInTheDocument();
+    expect(getToken()).toBeNull();
+    expect(sessionStorage.getItem('wallet.token')).toBeNull();
+    expect(f.callsTo('POST /api/auth/logout')).toHaveLength(1);
+    expect(f.callsTo('POST /api/auth/logout')[0].init.headers.Authorization).toBe('Bearer stored');
+  });
+
+  it.each([
+    ['the server is unreachable', () => Promise.reject(new TypeError('Failed to fetch'))],
+    ['the server fails (500)', () => res(500, { error: 'boom' })],
+  ])('log out still clears the local session when %s', async (_name, logoutResponse) => {
+    mockFetch({ ...authedHandlers(), 'POST /api/auth/logout': logoutResponse });
+    renderApp('/', { token: 'stored' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Log out' }));
+    expect(await screen.findByRole('heading', { name: 'Log in' })).toBeInTheDocument();
+    expect(getToken()).toBeNull();
+    expect(sessionStorage.getItem('wallet.token')).toBeNull();
+  });
+
+  it('a 401 from the logout call (token already revoked) does not loop or show an error', async () => {
+    const f = mockFetch({ ...authedHandlers(), 'POST /api/auth/logout': res(401) });
+    renderApp('/', { token: 'stored' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Log out' }));
+    expect(await screen.findByRole('heading', { name: 'Log in' })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(f.callsTo('POST /api/auth/logout')).toHaveLength(1);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(getToken()).toBeNull();
+  });
+
+  it('a late 401 from the logout call does not sign out a session that logged in meanwhile', async () => {
+    let answer;
+    mockFetch({
+      ...authedHandlers(),
+      'POST /api/auth/logout': () => new Promise((r) => (answer = () => r(res(401)))),
+    });
+    renderApp('/', { token: 'old' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Log out' }));
+    await screen.findByRole('heading', { name: 'Log in' });
+    setToken('new-session');
+    answer();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(getToken()).toBe('new-session');
+  });
+
+  it('a revoked token (401 on profile and wallet) leads to the login page, once, without error loops', async () => {
+    const f = mockFetch({ 'GET /api/users/me': res(401), 'GET /api/wallets/me': res(401) });
+    renderApp('/profile', { token: 'revoked' });
+    expect(await screen.findByRole('heading', { name: 'Log in' })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(getToken()).toBeNull();
+    expect(f.callsTo('GET /api/users/me')).toHaveLength(1);
+    expect(f.callsTo('POST /api/auth/logout')).toHaveLength(0);
   });
 
   it('a non-401 failure while loading the profile does not hang the app', async () => {

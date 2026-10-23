@@ -56,6 +56,7 @@ async function parseError(res) {
 
 async function request(method, path, { body, params, idempotencyKey } = {}) {
   const headers = {};
+  const sentToken = token; // a late 401 must not sign out a newer session (e.g. the logout call itself)
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
@@ -71,7 +72,7 @@ async function request(method, path, { body, params, idempotencyKey } = {}) {
     throw new ApiError(0, 'Cannot reach the server');
   }
 
-  if (res.status === 401 && token) {
+  if (res.status === 401 && sentToken && token === sentToken) {
     setToken(null);
     onUnauthorized();
   }
@@ -85,6 +86,8 @@ export const api = {
   login: (username, password) => request('POST', '/api/auth/login', { body: { username, password } }),
   register: (username, email, password) =>
     request('POST', '/api/auth/register', { body: { username, email, password } }),
+  // revokes every token of the user (all devices); 204
+  logout: () => request('POST', '/api/auth/logout'),
 
   // wallets
   myWallet: () => request('GET', '/api/wallets/me'),
@@ -103,6 +106,7 @@ export const api = {
   // profile
   me: () => request('GET', '/api/users/me'),
   updateEmail: (email) => request('PATCH', '/api/users/me', { body: { email } }),
+  // answers 200 with a NEW token (the old one is revoked): the caller must store it with setToken
   changePassword: (currentPassword, newPassword) =>
     request('POST', '/api/users/me/password', { body: { currentPassword, newPassword } }),
 

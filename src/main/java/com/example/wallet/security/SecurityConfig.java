@@ -14,6 +14,8 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.authority.AuthorityUtils;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -34,7 +36,7 @@ public class SecurityConfig {
      * Defines the HTTP security rules.
      * <ul>
      *   <li>CSRF and server-side sessions are disabled (stateless, token-based API).</li>
-     *   <li>{@code /api/auth/**} is public. The container's error forward to {@code /error} (dispatcher type ERROR) must
+     *   <li>{@code /api/auth/logout} requires authentication; the rest of {@code /api/auth/**} is public. The container's error forward to {@code /error} (dispatcher type ERROR) must
      *       be public because it is not re-authenticated by the JWT filter; without it a 403 would turn into a 401.
      *       A direct request to {@code /error} is denied (401 anonymous, 403 otherwise) instead of reaching Boot's
      *       error controller, which has no error to report and answers 500 with status 999.</li>
@@ -57,6 +59,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(a -> a
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 .requestMatchers("/error").denyAll()
+                .requestMatchers("/api/auth/logout").authenticated()
                 .requestMatchers("/api/auth/**").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated())
@@ -75,11 +78,8 @@ public class SecurityConfig {
     @Bean
     public UserDetailsService userDetailsService(UserRepository users) {
         return username -> users.findByUsername(username)
-                .map(u -> org.springframework.security.core.userdetails.User.withUsername(u.getUsername())
-                        .password(u.getPasswordHash())
-                        .roles(u.getRole().name())
-                        .disabled(!u.isEnabled())
-                        .build())
+                .<UserDetails>map(u -> new AuthUser(u.getUsername(), u.getPasswordHash(), u.isEnabled(),
+                        AuthorityUtils.createAuthorityList("ROLE_" + u.getRole().name()), u.getTokenVersion()))
                 .orElseThrow(() -> new UsernameNotFoundException("User not found"));
     }
 

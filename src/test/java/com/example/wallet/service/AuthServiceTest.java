@@ -3,6 +3,7 @@ package com.example.wallet.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -10,6 +11,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.example.wallet.TestData;
 import com.example.wallet.dto.AuthResponse;
 import com.example.wallet.dto.LoginRequest;
 import com.example.wallet.dto.RegisterRequest;
@@ -19,8 +21,10 @@ import com.example.wallet.entity.Wallet;
 import com.example.wallet.exception.ApiException;
 import com.example.wallet.repository.UserRepository;
 import com.example.wallet.repository.WalletRepository;
+import com.example.wallet.security.AuthUser;
 import com.example.wallet.security.JwtService;
 import java.math.BigDecimal;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -28,7 +32,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.DisabledException;
-import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 class AuthServiceTest {
@@ -39,13 +44,17 @@ class AuthServiceTest {
     JwtService jwt = mock(JwtService.class);
     AuthService service;
 
+    private static Authentication authFor(String name, long tokenVersion) {
+        return new UsernamePasswordAuthenticationToken(new AuthUser(name, "x", true, List.of(), tokenVersion), "pw");
+    }
+
     @BeforeEach
     void setUp() {
         service = new AuthService(users, wallets, encoder, authManager, jwt, new BigDecimal("100.00"), "USD", "admin", "admin@example.com");
         when(encoder.encode("password1")).thenReturn("ENC");
         when(users.save(any(User.class))).thenAnswer(i -> i.getArgument(0));
-        when(jwt.generateToken("alice")).thenReturn("tok");
-        when(authManager.authenticate(any())).thenReturn(new TestingAuthenticationToken("alice", "pw"));
+        when(jwt.generateToken("alice", 0L)).thenReturn("tok");
+        when(authManager.authenticate(any())).thenReturn(authFor("alice", 0L));
     }
 
     @Test
@@ -95,8 +104,8 @@ class AuthServiceTest {
 
     @Test
     void loginTrimsUsernameAndIssuesTokenForTheStoredUsername() {
-        when(authManager.authenticate(any())).thenReturn(new TestingAuthenticationToken("Alice", "pw"));
-        when(jwt.generateToken("Alice")).thenReturn("tok-stored");
+        when(authManager.authenticate(any())).thenReturn(authFor("Alice", 0L));
+        when(jwt.generateToken("Alice", 0L)).thenReturn("tok-stored");
         assertThat(service.login(new LoginRequest("  alice ", "pw")).token()).isEqualTo("tok-stored");
         ArgumentCaptor<org.springframework.security.core.Authentication> a =
                 ArgumentCaptor.forClass(org.springframework.security.core.Authentication.class);
@@ -112,7 +121,7 @@ class AuthServiceTest {
                     .isInstanceOf(BadCredentialsException.class);
         }
         verify(authManager, never()).authenticate(any());
-        verify(jwt, never()).generateToken(any());
+        verify(jwt, never()).generateToken(any(), anyLong());
         // exactly 72 bytes still goes to the authentication manager
         assertThat(service.login(new LoginRequest("alice", "a".repeat(72))).token()).isEqualTo("tok");
         assertThat(service.login(new LoginRequest("alice", "\u00E9".repeat(36))).token()).isEqualTo("tok");
@@ -122,12 +131,12 @@ class AuthServiceTest {
     void loginPropagatesDisabledAccountAndIssuesNoToken() {
         doThrow(new DisabledException("off")).when(authManager).authenticate(any());
         assertThatThrownBy(() -> service.login(new LoginRequest("alice", "pw"))).isInstanceOf(DisabledException.class);
-        verify(jwt, never()).generateToken(any());
+        verify(jwt, never()).generateToken(any(), anyLong());
     }
 
     @Test
     void registerTrimsUsernameAndEmailButKeepsCasing() {
-        when(jwt.generateToken("Alice")).thenReturn("tok2");
+        when(jwt.generateToken("Alice", 0L)).thenReturn("tok2");
         AuthResponse r = service.register(new RegisterRequest("  Alice ", " A@Example.com ", "password1"));
         assertThat(r.token()).isEqualTo("tok2");
         ArgumentCaptor<User> u = ArgumentCaptor.forClass(User.class);
@@ -175,6 +184,34 @@ class AuthServiceTest {
         doThrow(new BadCredentialsException("bad")).when(authManager).authenticate(any());
         assertThatThrownBy(() -> service.login(new LoginRequest("alice", "pw")))
                 .isInstanceOf(BadCredentialsException.class);
-        verify(jwt, never()).generateToken(any());
+        verify(jwt, never()).generateToken(any(), anyLong());
+    }
+
+    @Test
+    void loginPutsTheStoredTokenVersionIntoTheToken() {
+        when(authManager.authenticate(any())).thenReturn(authFor("alice", 7L));
+        when(jwt.generateToken("alice", 7L)).thenReturn("tok-v7");
+        assertThat(service.login(new LoginRequest("alice", "pw")).token()).isEqualTo("tok-v7");
+    }
+
+    @Test
+    void registerIssuesTheTokenForTheNewUsersVersionZero() {
+        service.register(new RegisterRequest("alice", "a@example.com", "password1"));
+        verify(jwt).generateToken("alice", 0L);
+    }
+
+    @Test
+    void logoutBumpsTheTokenVersionOfTheCallerOnly() {
+        User alice = TestData.user(5, "alice", Role.USER);
+        when(users.findByUsername("alice")).thenReturn(java.util.Optional.of(alice));
+        service.logout("alice");
+        verify(users).bumpTokenVersion(5L);
+        verify(users, never()).bumpTokenVersion(org.mockito.ArgumentMatchers.longThat(id -> id != 5L));
+    }
+
+    @Test
+    void logoutOfAnUnknownUserBumpsNothing() {
+        service.logout("ghost");
+        verify(users, never()).bumpTokenVersion(any());
     }
 }

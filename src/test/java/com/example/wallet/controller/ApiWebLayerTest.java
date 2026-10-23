@@ -77,7 +77,7 @@ class ApiWebLayerTest {
         when(userRepository.findByUsername("off")).thenReturn(Optional.of(disabled));
     }
 
-    private String bearer(String user) { return "Bearer " + jwt.generateToken(user); }
+    private String bearer(String user) { return "Bearer " + jwt.generateToken(user, 0L); }
 
     private static TransactionResponse tx() {
         return new TransactionResponse(1L, 1L, 2L, new BigDecimal("5"), "TRANSFER", "COMPLETED", null, null);
@@ -320,6 +320,28 @@ class ApiWebLayerTest {
                 .andExpect(status().isNotFound());
     }
 
+    // ---- logout / token revocation ----
+
+    @Test
+    void logoutRequiresAuthenticationAndAnAuthenticatedCallBumpsAndAnswers204() throws Exception {
+        mvc.perform(post("/api/auth/logout")).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/auth/logout").header("Authorization", "Bearer garbage"))
+                .andExpect(status().isUnauthorized());
+        verify(authService, never()).logout(any());
+
+        mvc.perform(post("/api/auth/logout").header("Authorization", bearer("alice")))
+                .andExpect(status().isNoContent());
+        verify(authService).logout("alice");
+    }
+
+    @Test
+    void tokenWithWrongOrMissingVersionIs401OnEveryProtectedEndpointAndOnLogout() throws Exception {
+        String wrong = "Bearer " + jwt.generateToken("alice", 1L); // stored version is 0
+        mvc.perform(get("/api/wallets/me").header("Authorization", wrong)).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/auth/logout").header("Authorization", wrong)).andExpect(status().isUnauthorized());
+        verify(authService, never()).logout(any());
+    }
+
     // ---- profile ----
 
     @Test
@@ -328,6 +350,7 @@ class ApiWebLayerTest {
         var resp = new UserResponse(1L, "alice", "new@b.co", "USER", true, null);
         when(userService.getProfile("alice")).thenReturn(resp);
         when(userService.updateEmail(eq("alice"), any())).thenReturn(resp);
+        when(userService.changePassword(eq("alice"), any())).thenReturn(new AuthResponse("fresh"));
 
         mvc.perform(get("/api/users/me").header("Authorization", h))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.username").value("alice"));
@@ -337,7 +360,7 @@ class ApiWebLayerTest {
         mvc.perform(post("/api/users/me/password").header("Authorization", h)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"currentPassword\":\"old\",\"newPassword\":\"newpassword\"}"))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isOk()).andExpect(jsonPath("$.token").value("fresh"));
         verify(userService).changePassword(eq("alice"), any());
     }
 

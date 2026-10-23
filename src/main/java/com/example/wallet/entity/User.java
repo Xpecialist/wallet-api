@@ -27,6 +27,13 @@ public class User {
     @Column(nullable = false)
     private boolean enabled = true;
 
+    /**
+     * Incremented to revoke every token issued so far. Never written by an entity update ({@code updatable = false}):
+     * only the atomic {@code UserRepository.bumpTokenVersion} changes it, so a stale entity can never undo a revocation.
+     */
+    @Column(name = "token_version", nullable = false, updatable = false)
+    private long tokenVersion;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -56,6 +63,8 @@ public class User {
     public boolean isEnabled() { return enabled; }
     /** @param enabled {@code false} to disable the user */
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
+    /** @return the token version as loaded; a token is valid only while its claim equals the stored value */
+    public long getTokenVersion() { return tokenVersion; }
     /** @return the creation timestamp, set automatically on first save */
     public LocalDateTime getCreatedAt() { return createdAt; }
 }

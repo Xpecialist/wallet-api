@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api } from '../api/client.js';
+import { api, setToken } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { Alert } from '../components/Feedback.jsx';
 import { Form, TextField } from '../components/Fields.jsx';
@@ -50,7 +50,9 @@ function ChangePasswordForm() {
     setError('');
     setSuccess('');
     try {
-      await api.changePassword(current, next);
+      const res = await api.changePassword(current, next);
+      // the old token (this session's too) is revoked by the change: keep the session with the fresh one
+      if (res?.token) setToken(res.token);
       setCurrent('');
       setNext('');
       setSuccess('Password changed.');

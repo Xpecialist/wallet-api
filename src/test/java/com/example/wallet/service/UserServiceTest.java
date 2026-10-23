@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.wallet.TestData;
+import com.example.wallet.dto.AuthResponse;
 import com.example.wallet.dto.ChangePasswordRequest;
 import com.example.wallet.dto.PageResponse;
 import com.example.wallet.dto.UpdateProfileRequest;
@@ -16,6 +17,7 @@ import com.example.wallet.entity.Role;
 import com.example.wallet.entity.User;
 import com.example.wallet.exception.ApiException;
 import com.example.wallet.repository.UserRepository;
+import com.example.wallet.security.JwtService;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,12 +37,13 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 class UserServiceTest {
     @Mock UserRepository users;
     @Mock PasswordEncoder encoder;
+    @Mock JwtService jwt;
     UserService service;
     User alice;
 
     @BeforeEach
     void setUp() {
-        service = new UserService(users, encoder);
+        service = new UserService(users, encoder, jwt);
         alice = TestData.user(1, "alice", Role.USER);
         when(users.findByUsername("alice")).thenReturn(Optional.of(alice));
         when(users.save(any(User.class))).thenAnswer(i -> i.getArgument(0));
@@ -192,5 +195,49 @@ class UserServiceTest {
             when(users.findAll(pageable)).thenReturn(new PageImpl<>(List.of(), pageable, 0));
             assertThat(service.listAll(pageable).content()).isEmpty();
         }
+    }
+
+    @Test
+    void changePasswordBumpsTheVersionThenIssuesTheTokenForTheNewVersion() {
+        when(encoder.matches("old", "hash-alice")).thenReturn(true);
+        when(encoder.encode("newpassword")).thenReturn("new-hash");
+        when(users.findTokenVersion(1L)).thenReturn(4L);
+        when(jwt.generateToken("alice", 4L)).thenReturn("fresh");
+
+        AuthResponse r = service.changePassword("alice", new ChangePasswordRequest("old", "newpassword"));
+
+        assertThat(r.token()).isEqualTo("fresh");
+        var order = org.mockito.Mockito.inOrder(users, jwt);
+        order.verify(users).save(alice);
+        order.verify(users).bumpTokenVersion(1L);
+        order.verify(users).findTokenVersion(1L);
+        order.verify(jwt).generateToken("alice", 4L);
+    }
+
+    @Test
+    void failedPasswordChangesNeverBumpTheVersion() {
+        when(encoder.matches("bad", "hash-alice")).thenReturn(false);
+        when(encoder.matches("same", "hash-alice")).thenReturn(true);
+        assertThatThrownBy(() -> service.changePassword("alice", new ChangePasswordRequest("bad", "newpassword")))
+                .isInstanceOf(ApiException.class);
+        assertThatThrownBy(() -> service.changePassword("alice", new ChangePasswordRequest("same", "same")))
+                .isInstanceOf(ApiException.class);
+        verify(users, never()).bumpTokenVersion(any());
+        verify(jwt, never()).generateToken(any(), org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    void disablingBumpsTheVersionButEnablingAndSelfDisableDoNot() {
+        when(users.findById(1L)).thenReturn(Optional.of(alice));
+        service.setEnabled(1L, true, "admin");
+        verify(users, never()).bumpTokenVersion(any());
+
+        service.setEnabled(1L, false, "admin");
+        verify(users).bumpTokenVersion(1L);
+
+        User admin = TestData.user(2, "admin", Role.ADMIN);
+        when(users.findById(2L)).thenReturn(Optional.of(admin));
+        assertThatThrownBy(() -> service.setEnabled(2L, false, "admin")).isInstanceOf(ApiException.class);
+        verify(users, never()).bumpTokenVersion(2L);
     }
 }

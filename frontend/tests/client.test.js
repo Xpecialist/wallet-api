@@ -189,3 +189,45 @@ describe('api client', () => {
     ]);
   });
 });
+
+describe('api client: logout and revoked tokens', () => {
+  it('logout posts to /api/auth/logout with the bearer token and no body, and returns null for 204', async () => {
+    setToken('tok');
+    const f = mockFetch({ 'POST /api/auth/logout': res(204) });
+    expect(await api.logout()).toBeNull();
+    expect(f.calls[0].method).toBe('POST');
+    expect(f.calls[0].init.headers.Authorization).toBe('Bearer tok');
+    expect(f.calls[0].init.body).toBeUndefined();
+    expect(f.calls[0].init.headers['Content-Type']).toBeUndefined();
+  });
+
+  it('changePassword returns the fresh token from the 200 response', async () => {
+    mockFetch({ 'POST /api/users/me/password': res(200, { token: 'fresh', tokenType: 'Bearer' }) });
+    expect(await api.changePassword('old', 'new')).toEqual({ token: 'fresh', tokenType: 'Bearer' });
+  });
+
+  it('a 401 for a token that is no longer the current one does not clear the current session', async () => {
+    const handler = vi.fn();
+    setUnauthorizedHandler(handler);
+    setToken('old');
+    let answer;
+    globalThis.fetch = vi.fn(() => new Promise((r) => (answer = () => r(res(401)))));
+    const pending = api.myWallet().catch((e) => e);
+    setToken('new');
+    answer();
+    const err = await pending;
+    expect(err.status).toBe(401);
+    expect(getToken()).toBe('new');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('a 401 on the very same token still clears it and calls the handler once', async () => {
+    const handler = vi.fn();
+    setUnauthorizedHandler(handler);
+    setToken('revoked');
+    mockFetch({ 'GET /api/users/me': res(401) });
+    await api.me().catch(() => {});
+    expect(getToken()).toBeNull();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+});

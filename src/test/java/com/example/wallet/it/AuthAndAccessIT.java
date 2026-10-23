@@ -174,7 +174,9 @@ class AuthAndAccessIT extends ItBase {
 
         assertThat(patchJson("/api/admin/users/" + bobId + "/status", admin, map("enabled", true))
                 .getResponse().getStatus()).isEqualTo(200);
-        assertThat(getJson("/api/wallets/me", token).getResponse().getStatus()).isEqualTo(200);
+        // disabling bumped the token version: the old token stays dead after re-enabling, a fresh login works
+        assertThat(getJson("/api/wallets/me", token).getResponse().getStatus()).isEqualTo(401);
+        assertThat(getJson("/api/wallets/me", login("bob", PASSWORD)).getResponse().getStatus()).isEqualTo(200);
     }
 
     @Test
@@ -305,16 +307,17 @@ class AuthAndAccessIT extends ItBase {
                 .getResponse().getStatus()).isEqualTo(400);
         assertThat(jdbc.queryForObject("select password_hash from users", String.class)).isEqualTo(oldHash);
 
-        assertThat(postJson("/api/users/me/password", t,
-                map("currentPassword", PASSWORD, "newPassword", "BrandNew!456"), null)
-                .getResponse().getStatus()).isEqualTo(204);
+        MvcResult changed = postJson("/api/users/me/password", t,
+                map("currentPassword", PASSWORD, "newPassword", "BrandNew!456"), null);
+        assertThat(changed.getResponse().getStatus()).isEqualTo(200);
+        String fresh = body(changed).get("token").asText();
         assertThat(jdbc.queryForObject("select password_hash from users", String.class)).isNotEqualTo(oldHash);
 
         assertThat(postJson("/api/auth/login", null, map("username", "alice", "password", PASSWORD), null)
                 .getResponse().getStatus()).isEqualTo(401);
         assertThat(login("alice", "BrandNew!456")).isNotBlank();
 
-        assertThat(postJson("/api/users/me/password", t,
+        assertThat(postJson("/api/users/me/password", fresh,
                 map("currentPassword", "BrandNew!456", "newPassword", "short"), null)
                 .getResponse().getStatus()).isEqualTo(400);
     }

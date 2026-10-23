@@ -1,5 +1,6 @@
 package com.example.wallet.service;
 
+import com.example.wallet.dto.AuthResponse;
 import com.example.wallet.dto.ChangePasswordRequest;
 import com.example.wallet.dto.PageResponse;
 import com.example.wallet.dto.UpdateProfileRequest;
@@ -7,6 +8,7 @@ import com.example.wallet.dto.UserResponse;
 import com.example.wallet.entity.User;
 import com.example.wallet.exception.ApiException;
 import com.example.wallet.repository.UserRepository;
+import com.example.wallet.security.JwtService;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -18,16 +20,19 @@ import org.springframework.transaction.annotation.Transactional;
 public class UserService {
     private final UserRepository users;
     private final PasswordEncoder encoder;
+    private final JwtService jwt;
 
     /**
      * Creates the service.
      *
      * @param users   user repository
      * @param encoder password encoder
+     * @param jwt     token service (issues the fresh token after a password change)
      */
-    public UserService(UserRepository users, PasswordEncoder encoder) {
+    public UserService(UserRepository users, PasswordEncoder encoder, JwtService jwt) {
         this.users = users;
         this.encoder = encoder;
+        this.jwt = jwt;
     }
 
     /**
@@ -63,15 +68,19 @@ public class UserService {
 
     /**
      * Changes the password of the given user after verifying the current one. The new password is hashed with the
-     * application's password encoder.
+     * application's password encoder. Every token issued so far (on all devices) is revoked by bumping the token
+     * version in the same transaction, and a fresh token for the new version is returned so the caller's own
+     * session survives. The bump's row lock is held until commit, so the version read right after it is exactly
+     * the one this call produced even if a logout runs concurrently.
      *
      * @param username the username
      * @param req      the current and new passwords
+     * @return a new token valid for the new token version
      * @throws ApiException 404 if the user does not exist; 400 if the current password is wrong or the new password
      *         is the same as the current one
      */
     @Transactional
-    public void changePassword(String username, ChangePasswordRequest req) {
+    public AuthResponse changePassword(String username, ChangePasswordRequest req) {
         User u = find(username);
         if (!encoder.matches(req.currentPassword(), u.getPasswordHash())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Current password is incorrect");
@@ -81,6 +90,8 @@ public class UserService {
         }
         u.setPasswordHash(encoder.encode(req.newPassword()));
         users.save(u);
+        users.bumpTokenVersion(u.getId());
+        return new AuthResponse(jwt.generateToken(u.getUsername(), users.findTokenVersion(u.getId())));
     }
 
     /**
@@ -98,7 +109,8 @@ public class UserService {
     }
 
     /**
-     * Enables or disables a user. A disabled user cannot log in and their existing tokens are rejected.
+     * Enables or disables a user. A disabled user cannot log in and their existing tokens are rejected. Disabling
+     * also bumps the token version, so the user needs a fresh login (new token) after being re-enabled.
      *
      * @param id         the id of the user to change
      * @param enabled    the new status
@@ -113,7 +125,9 @@ public class UserService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "You cannot disable your own account");
         }
         u.setEnabled(enabled);
-        return UserResponse.from(users.save(u));
+        UserResponse saved = UserResponse.from(users.save(u));
+        if (!enabled) users.bumpTokenVersion(u.getId());
+        return saved;
     }
 
     /**

@@ -62,6 +62,13 @@ export function AuthProvider({ children }) {
     setAuthenticated(true);
   }, []);
 
+  // Log out of all devices. Best effort: the local session is always cleared at once, even if the call fails
+  // (offline, or the token is already revoked and the server answers 401, which does not loop: see the client).
+  const signOut = useCallback(() => {
+    api.logout().catch(() => {});
+    clear();
+  }, [clear]);
+
   const value = useMemo(
     () => ({
       authenticated,
@@ -70,11 +77,11 @@ export function AuthProvider({ children }) {
       wallet,
       isAdmin: user?.role === 'ADMIN',
       signIn,
-      signOut: clear,
+      signOut,
       refreshWallet,
       refreshUser,
     }),
-    [authenticated, ready, user, wallet, signIn, clear, refreshWallet, refreshUser]
+    [authenticated, ready, user, wallet, signIn, signOut, refreshWallet, refreshUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

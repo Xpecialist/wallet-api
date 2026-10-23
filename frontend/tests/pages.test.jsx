@@ -1,8 +1,8 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { getToken } from '../src/api/client.js';
-import { ADMIN, USER, authedHandlers, mockFetch, page, renderApp, res } from './helpers.jsx';
+import { api, getToken } from '../src/api/client.js';
+import { ADMIN, USER, WALLET, authedHandlers, mockFetch, page, renderApp, res } from './helpers.jsx';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -82,6 +82,36 @@ describe('Profile page', () => {
     });
     expect(within(s).getByLabelText('Current password')).toHaveValue('');
     expect(within(s).getByLabelText(/^New password/)).toHaveValue('');
+  });
+
+  it('stores the fresh token returned by a password change so the session survives and later calls use it', async () => {
+    const { f, user } = await open({
+      'POST /api/users/me/password': res(200, { token: 'fresh-jwt', tokenType: 'Bearer' }),
+      'GET /api/wallets/me': res(200, WALLET),
+    });
+    const s = pwSection();
+    await user.type(within(s).getByLabelText('Current password'), 'oldpassword');
+    await user.type(within(s).getByLabelText(/^New password/), 'newpassword1');
+    await user.click(within(s).getByRole('button', { name: 'Change password' }));
+    expect(await within(s).findByRole('status')).toHaveTextContent('Password changed.');
+    expect(f.callsTo('POST /api/users/me/password')[0].init.headers.Authorization).toBe('Bearer t');
+    expect(getToken()).toBe('fresh-jwt');
+    expect(sessionStorage.getItem('wallet.token')).toBe('fresh-jwt');
+    expect(screen.getByRole('heading', { name: 'Profile' })).toBeInTheDocument();
+    await api.myWallet();
+    expect(f.callsTo('GET /api/wallets/me').at(-1).init.headers.Authorization).toBe('Bearer fresh-jwt');
+  });
+
+  it('a failed password change keeps the old token', async () => {
+    const { user } = await open({
+      'POST /api/users/me/password': res(400, { status: 400, error: 'Current password is incorrect' }),
+    });
+    const s = pwSection();
+    await user.type(within(s).getByLabelText('Current password'), 'wrongpass');
+    await user.type(within(s).getByLabelText(/^New password/), 'newpassword1');
+    await user.click(within(s).getByRole('button', { name: 'Change password' }));
+    await within(s).findByRole('alert');
+    expect(getToken()).toBe('t');
   });
 
   it('declares the 8-72 character rule on the new password (jsdom does not enforce minlength, so the attributes are checked)', async () => {

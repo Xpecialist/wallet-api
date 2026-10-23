@@ -102,13 +102,13 @@ class FlywayMigrationIT {
         MigrateResult r = flyway().migrate();
 
         assertThat(r.success).isTrue();
-        assertThat(r.migrationsExecuted).isEqualTo(1);
+        assertThat(r.migrationsExecuted).isEqualTo(2);
         for (String t : TABLES) assertThat(tableExists(t)).as("created: " + t).isTrue();
-        assertThat(jdbc.queryForObject("select version from flyway_schema_history where success", String.class))
-                .isEqualTo("1");
-        assertThat(jdbc.queryForObject("select type from flyway_schema_history", String.class))
+        assertThat(jdbc.queryForList("select version from flyway_schema_history where success order by installed_rank", String.class))
+                .containsExactly("1", "2");
+        assertThat(jdbc.queryForObject("select type from flyway_schema_history where version='1'", String.class))
                 .as("V1 really ran, it was not just baselined").isEqualTo("SQL");
-        SchemaShapeGuard.verify(jdbc, "shape");
+        SchemaShapeGuard.verifyCurrent(jdbc, "shape");
     }
 
     @Test
@@ -118,7 +118,7 @@ class FlywayMigrationIT {
         }
         assertThat(jdbc.queryForObject("select type from flyway_schema_history where version='1'", String.class))
                 .isEqualTo("SQL");
-        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(1);
+        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(2);
     }
 
     // ---- (b) existing database with the current schema and no history ----------------------------------------
@@ -133,9 +133,10 @@ class FlywayMigrationIT {
             assertThat(ctx.isRunning()).as("started, so Hibernate validate passed").isTrue();
         }
 
-        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(1);
-        assertThat(jdbc.queryForObject("select type from flyway_schema_history", String.class)).isEqualTo("BASELINE");
-        assertThat(jdbc.queryForObject("select version from flyway_schema_history", String.class)).isEqualTo("1");
+        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(2);
+        assertThat(jdbc.queryForObject("select type from flyway_schema_history where version='1'", String.class)).isEqualTo("BASELINE");
+        assertThat(jdbc.queryForObject("select type from flyway_schema_history where version='2'", String.class)).isEqualTo("SQL");
+        assertThat(count("select count(*) from users where token_version = 0")).as("existing rows start at 0").isEqualTo(3);
         assertThat(count("select count(*) from users")).isEqualTo(3);
         assertThat(count("select count(*) from wallets")).isEqualTo(3);
         assertThat(count("select count(*) from transactions")).isEqualTo(3);
@@ -170,6 +171,48 @@ class FlywayMigrationIT {
                 .hasMessageContaining("missing constraint chk_tx_type_wallets");
     }
 
+    @Test
+    void v1OnlyDatabaseWithDataMigratesToV2KeepingEverythingAndStartingTokenVersionsAtZero() {
+        Flyway v1 = Flyway.configure().dataSource(ds).locations("classpath:db/migration").target("1").load();
+        assertThat(v1.migrate().migrationsExecuted).isEqualTo(1);
+        insertSomeData();
+        assertThat(count("select count(*) from information_schema.columns where table_name='users' and column_name='token_version'"))
+                .as("V1 has no token_version").isZero();
+        SchemaShapeGuard.verify(jdbc, "V1 shape");
+
+        MigrateResult r = flyway().migrate();
+
+        assertThat(r.success).isTrue();
+        assertThat(r.migrationsExecuted).isEqualTo(1);
+        assertThat(jdbc.queryForList("select version from flyway_schema_history where success order by installed_rank",
+                String.class)).containsExactly("1", "2");
+        assertThat(count("select count(*) from users")).isEqualTo(3);
+        assertThat(count("select count(*) from wallets")).isEqualTo(3);
+        assertThat(count("select count(*) from transactions")).isEqualTo(3);
+        assertThat(jdbc.queryForObject("select sum(balance) from wallets", BigDecimal.class)).isEqualByComparingTo("300");
+        assertThat(count("select count(*) from users where token_version = 0")).isEqualTo(3);
+        assertThat(jdbc.queryForObject("select data_type || '/' || is_nullable || '/' || column_default from "
+                + "information_schema.columns where table_name='users' and column_name='token_version'", String.class))
+                .isEqualTo("bigint/NO/0");
+        jdbc.update("insert into users(id,username,email,password_hash) values (100,'erin','erin@example.com','h')");
+        assertThat(count("select token_version from users where username='erin'")).as("default for new rows").isZero();
+        SchemaShapeGuard.verifyCurrent(jdbc, "current shape");
+        try (ConfigurableApplicationContext ctx = startApp()) {
+            assertThat(ctx.isRunning()).as("Hibernate validate passes on the migrated database").isTrue();
+        }
+    }
+
+    @Test
+    void currentShapeCheckNamesAMissingTokenVersionColumnWhileTheV1CheckStillPasses() {
+        flyway().migrate();
+        jdbc.execute("alter table users drop column token_version");
+
+        SchemaShapeGuard.verify(jdbc, "V1 shape");
+        assertThatThrownBy(() -> SchemaShapeGuard.verifyCurrent(jdbc, "Drifted"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("missing column users.token_version");
+    }
+
     // ---- (c) repeated migration ------------------------------------------------------------------------------
 
     @Test
@@ -183,7 +226,7 @@ class FlywayMigrationIT {
 
         assertThat(second.success).isTrue();
         assertThat(second.migrationsExecuted).isZero();
-        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(1);
+        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(2);
         assertThat(count("select count(*) from pg_indexes where schemaname=current_schema()")).isEqualTo(indexes);
         assertThat(count("select count(*) from pg_constraint")).isEqualTo(constraints);
         assertThat(count("select count(*) from users")).as("data untouched").isEqualTo(1);
@@ -193,7 +236,7 @@ class FlywayMigrationIT {
     void applicationRestartOnAMigratedDatabaseChangesNothing() {
         try (ConfigurableApplicationContext ctx = startApp()) { assertThat(ctx.isRunning()).isTrue(); }
         try (ConfigurableApplicationContext ctx = startApp()) { assertThat(ctx.isRunning()).isTrue(); }
-        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(1);
+        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(2);
     }
 
     // ---- (d) schema shape ------------------------------------------------------------------------------------
@@ -282,5 +325,6 @@ class FlywayMigrationIT {
         assertThat(p.getProperty("spring.sql.init.mode")).isNull();
         assertThat(new ClassPathResource("schema.sql").exists()).isFalse();
         assertThat(new ClassPathResource("db/migration/V1__baseline.sql").exists()).isTrue();
+        assertThat(new ClassPathResource("db/migration/V2__user_token_version.sql").exists()).isTrue();
     }
 }
