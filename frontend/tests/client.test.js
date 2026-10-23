@@ -231,3 +231,55 @@ describe('api client: logout and revoked tokens', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('api client: rate limiting (HTTP 429)', () => {
+  const limited = (retryAfter) => ({
+    ...res(429, { status: 429, error: 'Too many requests, try again in 12 seconds' }),
+    headers: { get: (name) => (name.toLowerCase() === 'retry-after' ? retryAfter : null) },
+  });
+
+  it('maps 429 with Retry-After to a clear message with the seconds', async () => {
+    mockFetch({ 'POST /api/auth/login': limited('12') });
+    const err = await api.login('alice', 'x').catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(429);
+    expect(err.retryAfter).toBe(12);
+    expect(err.message).toBe('Too many attempts. Try again in 12 seconds.');
+  });
+
+  it('uses the singular for one second', async () => {
+    mockFetch({ 'POST /api/auth/login': limited('1') });
+    const err = await api.login('alice', 'x').catch((e) => e);
+    expect(err.message).toBe('Too many attempts. Try again in 1 second.');
+  });
+
+  it('falls back to a generic message when Retry-After is missing or not a positive whole number', async () => {
+    for (const value of [null, '', 'soon', '0', '-5', '1.5', 'Wed, 21 Oct 2026 07:28:00 GMT']) {
+      mockFetch({ 'POST /api/auth/register': limited(value) });
+      const err = await api.register('alice', 'a@b.co', 'secret123').catch((e) => e);
+      expect(err.status).toBe(429);
+      expect(err.retryAfter).toBeNull();
+      expect(err.message).toBe('Too many attempts. Please wait a moment and try again.');
+    }
+  });
+
+  it('works when the response has no headers object at all', async () => {
+    mockFetch({ 'POST /api/auth/login': res(429, { error: 'x' }) });
+    const err = await api.login('alice', 'x').catch((e) => e);
+    expect(err.message).toBe('Too many attempts. Please wait a moment and try again.');
+  });
+
+  it('does not sign the user out and does not retry', async () => {
+    setToken('tok');
+    let cleared = 0;
+    setUnauthorizedHandler(() => cleared++);
+    const f = mockFetch({ 'POST /api/transactions/transfer': limited('30') });
+    const err = await api.transfer({}, 'k').catch((e) => e);
+    expect(err.status).toBe(429);
+    expect(getToken()).toBe('tok');
+    expect(cleared).toBe(0);
+    expect(f.calls).toHaveLength(1);
+    setToken(null);
+    setUnauthorizedHandler(() => {});
+  });
+});

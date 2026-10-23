@@ -265,7 +265,7 @@ Errors from the application use this shape:
 { "timestamp": "2026-10-16T00:00:00Z", "status": 422, "error": "Insufficient funds" }
 ```
 
-Status codes you will see: 400 (validation, transfer to self, no receiver, currency mismatch, invalid `Idempotency-Key` header (blank or over 100 characters), invalid sort property), 401 (bad credentials or disabled account at login, or missing/invalid token; the missing-token 401 has an empty body), 403 (a non-admin calling an admin endpoint), 404 (missing, or not yours: wallets and transactions of other users look exactly like missing ones), 409 (duplicate username/email, idempotency key reused with a different request), 422 (insufficient funds).
+Status codes you will see: 400 (validation, transfer to self, no receiver, currency mismatch, invalid `Idempotency-Key` header (blank or over 100 characters), invalid sort property), 401 (bad credentials or disabled account at login, or missing/invalid token; the missing-token 401 has an empty body), 403 (a non-admin calling an admin endpoint), 404 (missing, or not yours: wallets and transactions of other users look exactly like missing ones), 409 (duplicate username/email, idempotency key reused with a different request), 422 (insufficient funds), 429 (rate limit exceeded, see [Rate limiting](#rate-limiting)).
 
 ### curl walkthrough
 
@@ -331,6 +331,37 @@ The version is increased with one atomic `UPDATE users SET token_version = token
 
 There is no endpoint that changes a role, so there is nothing to bump there yet; a future role change must call `UserRepository.bumpTokenVersion` too. Login and registration issue tokens with the current version. Tokens issued before this feature have no `tv` claim and are rejected: users simply log in again. Logging out is therefore "log out everywhere"; there is no per-device logout. Tokens are still short-lived (1 hour). Details: `TOKEN_REVOCATION_LOG.md`.
 
+## Rate limiting
+
+Brute-force and flood protection with in-memory token buckets (no extra dependency; `RateLimitFilter`, `UserRateLimitFilter`, `TokenBucketLimiter`). Each rule is "N requests per window", refilled continuously, so a blocked client is let in again automatically (5 per minute = a burst of 5, then one every 12 seconds). Nothing is locked permanently. Every attempt counts, successful or not.
+
+| Rule | Applies to | Key | Default |
+|---|---|---|---|
+| `login-ip` | `POST /api/auth/login` | client IP | 5 per 1 minute |
+| `login-username` | `POST /api/auth/login` | target username, trimmed and lower case (unknown names are counted exactly like real ones) | 5 per 1 minute |
+| `register-ip` | `POST /api/auth/register` | client IP | 5 per 1 hour |
+| `password-user` | `POST /api/users/me/password` | authenticated user | 5 per 15 minutes |
+| `password-ip` | `POST /api/users/me/password` | client IP | 5 per 15 minutes |
+| `money-user` | `POST /api/transactions/transfer`, `/api/wallets/me/withdraw`, `/api/deposit-requests` (one shared bucket) | authenticated user | 30 per 1 minute |
+| `admin-user` | admin deposit, approve and reject | authenticated user | 120 per 1 minute |
+| `global-ip` | everything under `/api/**` | client IP | 300 per 1 minute |
+
+Properties (all under `app.rate-limit.`): `enabled` (master switch, default `true`), `<rule>.capacity` and `<rule>.window` for each rule above (for example `login-ip.capacity=5`, `login-ip.window=1m`; durations like `30s`, `15m`, `1h`), `max-keys` (default 50000), `trust-forwarded-headers` (default `false`) and `trusted-proxies` (default 1). The defaults are in `application.properties`.
+
+When a limit is exceeded the API answers **429** with a `Retry-After` header (whole seconds) and the usual error body:
+
+```
+HTTP/1.1 429
+Retry-After: 12
+{"timestamp":"...","status":429,"error":"Too many requests, try again in 12 seconds"}
+```
+
+The login and registration limits run first in the security chain, before token parsing or any BCrypt work, so a rejected request is cheap; the per-user limits run right after the JWT filter. A 429 never reveals whether a username exists: the per-username bucket is applied to unknown names in the same way. The frontend shows "Too many attempts. Try again in N seconds." on every form.
+
+**Client address and reverse proxies.** By default the client is the TCP peer address of the connection; `X-Forwarded-For` is ignored, so a client cannot dodge the per-IP limits by sending that header. Behind a reverse proxy or load balancer every request would come from the proxy's address and share one bucket, so set `app.rate-limit.trust-forwarded-headers=true` and `app.rate-limit.trusted-proxies=<number of proxies in front of the app>`. The client is then the entry that many positions from the RIGHT of `X-Forwarded-For` (each trusted proxy appends the address it received the request from; entries to the left can be written by the client and are ignored). If the header is shorter than expected or not an address, the peer address is used. Only enable this when the application is reachable ONLY through those proxies and they set/append the header; otherwise anyone connecting directly can forge it.
+
+**Limitations.** The counters live in this JVM's memory: with several instances each one counts on its own (the effective limit is multiplied) and a restart resets them; a multi-instance deployment needs a shared store such as Redis. Memory is bounded: at most `max-keys` keys per rule (least recently used evicted first, idle keys expire after one window). Users behind one shared address (office, school, mobile carrier NAT) share the per-IP buckets. Because the username bucket is shared across all IPs, someone who keeps guessing a name can keep that account's login slowed to one attempt per 12 seconds (a short throttle, never a lockout; the password stays safe). Details: `RATE_LIMITING_LOG.md`.
+
 ## Design notes
 
 - **JWT auth.** Tokens are HMAC-signed with the Base64 secret in `app.jwt.secret`, with the username as subject, the user's token version (`tv`, see [Token revocation](#token-revocation)) plus issued-at and expiry. `JwtAuthFilter` validates the bearer token and loads the user (and current role) from the database on each request. Sessions and CSRF are disabled. Missing or invalid tokens leave the request unauthenticated; protected endpoints then return 401. Authenticated non-admins on `/api/admin/**` get 403. The container's error forward to `/error` is public (dispatcher type ERROR) so error forwards keep their real status; a direct request to `/error` is denied (401/403), never a 500. Multipart is disabled (no uploads), so `multipart/form-data` gets 415. Login compares the password before checking the disabled flag (no timing difference) and treats passwords over 72 bytes as wrong.
@@ -368,5 +399,5 @@ wallet-api
 ## Status and limitations
 
 - Automated tests: `mvn test` (unit, no database), `mvn verify` (also the integration tests against a separate empty database `walletdb_test`), `cd frontend && npm test`. See `TEST_FINDINGS.md`, `SECURITY_FIXES_LOG.md`.
-- Not done yet (see `TEST_FINDINGS.md`): rate limiting, DB credential hardening.
+- Not done yet (see `TEST_FINDINGS.md`): DB credential hardening. Rate limiting is in memory and per instance (see [Rate limiting](#rate-limiting)).
 - Defaults are for local development only: the `postgres`/`postgres` database credentials and the plain JDBC URL. There is no default JWT secret.

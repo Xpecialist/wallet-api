@@ -2,6 +2,7 @@ package com.example.wallet.security;
 
 import com.example.wallet.repository.UserRepository;
 import jakarta.servlet.DispatcherType;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -23,6 +24,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Spring Security configuration: stateless JWT authentication, role-based access rules, and the beans needed for
@@ -44,15 +46,22 @@ public class SecurityConfig {
      *   <li>Everything else requires authentication.</li>
      *   <li>Unauthenticated access to a protected endpoint returns 401 with no body. An authenticated user
      *       lacking the required role gets the default 403.</li>
+     *   <li>Rate limiting ({@link RateLimitFilter}) runs first in the chain, before any token parsing or BCrypt work;
+     *       the per-user limits ({@link UserRateLimitFilter}) run right after {@link JwtAuthFilter}. Both are plain
+     *       objects, not beans, so Boot does not also register them as servlet filters.</li>
      * </ul>
      *
      * @param http          the HTTP security builder
      * @param jwtAuthFilter the JWT filter, registered before the username/password filter
+     * @param rateLimits    the rate limiter state; absent only in web-layer test slices that do not load it
+     * @param mapper        reads login bodies for the per-username limit
      * @return the configured filter chain
      * @throws Exception if the configuration cannot be built
      */
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http, JwtAuthFilter jwtAuthFilter) throws Exception {
+    public SecurityFilterChain filterChain(HttpSecurity http, JwtAuthFilter jwtAuthFilter,
+                                           ObjectProvider<RateLimits> rateLimits, JsonMapper mapper)
+            throws Exception {
         http
             .csrf(AbstractHttpConfigurer::disable)
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -65,6 +74,11 @@ public class SecurityConfig {
                 .anyRequest().authenticated())
             .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+        RateLimits limits = rateLimits.getIfAvailable();
+        if (limits != null) {
+            http.addFilterBefore(new RateLimitFilter(limits, mapper), JwtAuthFilter.class)
+                .addFilterAfter(new UserRateLimitFilter(limits), JwtAuthFilter.class);
+        }
         return http.build();
     }
 
