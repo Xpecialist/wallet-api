@@ -4,6 +4,7 @@ import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { Alert } from '../components/Feedback.jsx';
 import { Form, TextField } from '../components/Fields.jsx';
+import { BrandMark } from '../components/Layout.jsx';
 
 /** Shared shell for the login and register forms. */
 function AuthPage({ title, submitText, request, fields, footer }) {
@@ -31,6 +32,10 @@ function AuthPage({ title, submitText, request, fields, footer }) {
 
   return (
     <div className="auth-page">
+      <div className="auth-brand">
+        <BrandMark />
+        <span>Wallet</span>
+      </div>
       <section className="card">
         <h1>{title}</h1>
         <Form onSubmit={submit} busy={busy} submitText={submitText}>

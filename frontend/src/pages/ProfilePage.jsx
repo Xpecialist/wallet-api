@@ -111,7 +111,7 @@ export default function ProfilePage() {
           <dd>{formatDate(user.createdAt)}</dd>
         </dl>
       </section>
-      <div className="grid-2">
+      <div className="grid-2 grid-equal">
         <ChangeEmailForm user={user} onChanged={refreshUser} />
         <ChangePasswordForm />
       </div>

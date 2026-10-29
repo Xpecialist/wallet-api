@@ -25,7 +25,7 @@ export function SelectField({ label, options, ...props }) {
 }
 
 /** Form wrapper with a submit button that is disabled while `busy`. */
-export function Form({ onSubmit, busy, submitText, children }) {
+export function Form({ onSubmit, busy, submitText, submitClass, children }) {
   return (
     <form
       className="form"
@@ -35,7 +35,7 @@ export function Form({ onSubmit, busy, submitText, children }) {
       }}
     >
       {children}
-      <button type="submit" disabled={busy}>
+      <button type="submit" className={submitClass} disabled={busy} aria-busy={busy ? 'true' : undefined}>
         {busy ? 'Please wait...' : submitText}
       </button>
     </form>

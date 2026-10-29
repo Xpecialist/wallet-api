@@ -56,13 +56,13 @@ export default function DepositsPage() {
   }
 
   const columns = [
-    { key: 'id', header: 'ID' },
-    { key: 'amount', header: 'Amount', render: (r) => formatMoney(r.amount, wallet?.currency) },
-    { key: 'note', header: 'Note', render: (r) => r.note || '-' },
+    { key: 'id', header: 'ID', numeric: true },
+    { key: 'amount', header: 'Amount', numeric: true, render: (r) => formatMoney(r.amount, wallet?.currency) },
+    { key: 'note', header: 'Note', render: (r) => r.note || '-', cellClass: 'cell-note' },
     { key: 'status', header: 'Status', render: (r) => <StatusBadge status={r.status} /> },
-    { key: 'createdAt', header: 'Requested', render: (r) => formatDate(r.createdAt) },
-    { key: 'decidedAt', header: 'Decided', render: (r) => formatDate(r.decidedAt) },
-    { key: 'decisionNote', header: 'Decision note', render: (r) => r.decisionNote || '-' },
+    { key: 'createdAt', header: 'Requested', render: (r) => formatDate(r.createdAt), cellClass: 'cell-muted' },
+    { key: 'decidedAt', header: 'Decided', render: (r) => formatDate(r.decidedAt), cellClass: 'cell-muted' },
+    { key: 'decisionNote', header: 'Decision note', render: (r) => r.decisionNote || '-', cellClass: 'cell-note' },
   ];
 
   return (

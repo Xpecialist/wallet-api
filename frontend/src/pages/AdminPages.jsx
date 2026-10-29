@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink, Navigate, Outlet } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
@@ -17,7 +17,7 @@ export function AdminLayout() {
   return (
     <>
       <h1>Admin</h1>
-      <nav className="subnav">
+      <nav className="subnav" aria-label="Admin sections">
         <NavLink to="/admin/users">Users</NavLink>
         <NavLink to="/admin/transactions">All transactions</NavLink>
         <NavLink to="/admin/deposit-requests">Deposit requests</NavLink>
@@ -53,15 +53,20 @@ export function AdminUsersPage() {
   }
 
   const columns = [
-    { key: 'id', header: 'ID' },
+    { key: 'id', header: 'ID', numeric: true },
     { key: 'username', header: 'Username' },
     { key: 'email', header: 'Email' },
-    { key: 'role', header: 'Role' },
-    { key: 'enabled', header: 'Status', render: (u) => (u.enabled ? 'Enabled' : 'Disabled') },
-    { key: 'createdAt', header: 'Created', render: (u) => formatDate(u.createdAt) },
+    { key: 'role', header: 'Role', render: (u) => <span className={`tag tag-${String(u.role).toLowerCase()}`}>{u.role}</span> },
+    {
+      key: 'enabled',
+      header: 'Status',
+      render: (u) => <span className={`tag ${u.enabled ? 'tag-enabled' : 'tag-disabled'}`}>{u.enabled ? 'Enabled' : 'Disabled'}</span>,
+    },
+    { key: 'createdAt', header: 'Created', render: (u) => formatDate(u.createdAt), cellClass: 'cell-muted' },
     {
       key: 'actions',
       header: '',
+      actions: true,
       render: (u) => (
         <button
           type="button"
@@ -83,7 +88,7 @@ export function AdminUsersPage() {
       {loading && !data && <Loading />}
       {data && (
         <>
-          <DataTable columns={columns} rows={data.content} emptyText="No users." />
+          <DataTable columns={columns} rows={data.content} cards emptyText="No users." />
           <Pagination data={data} onPage={setPage} />
         </>
       )}
@@ -128,6 +133,13 @@ export function AdminDepositRequestsPage() {
   const [success, setSuccess] = useState('');
   const [rejecting, setRejecting] = useState(null); // the request being rejected
   const [reason, setReason] = useState('');
+  const rejectBox = useRef(null);
+
+  // Bring the reason form into view when a row's Reject is pressed (it sits right above the table).
+  useEffect(() => {
+    const box = rejectBox.current;
+    if (rejecting && box && typeof box.scrollIntoView === 'function') box.scrollIntoView({ block: 'nearest' });
+  }, [rejecting]);
 
   async function run(call, doneText) {
     setBusy(true);
@@ -150,24 +162,31 @@ export function AdminDepositRequestsPage() {
   const reject = () => run(() => api.rejectDepositRequest(rejecting.id, reason.trim()), `Request #${rejecting.id} rejected.`);
 
   const columns = [
-    { key: 'id', header: 'ID' },
+    { key: 'id', header: 'ID', numeric: true },
     { key: 'username', header: 'User' },
-    { key: 'walletId', header: 'Wallet' },
-    { key: 'amount', header: 'Amount', render: (r) => formatMoney(r.amount) },
-    { key: 'note', header: 'Note', render: (r) => r.note || '-' },
+    { key: 'walletId', header: 'Wallet', numeric: true },
+    { key: 'amount', header: 'Amount', numeric: true, render: (r) => formatMoney(r.amount) },
+    { key: 'note', header: 'Note', render: (r) => r.note || '-', cellClass: 'cell-note', title: (r) => r.note || undefined },
     { key: 'status', header: 'Status', render: (r) => <StatusBadge status={r.status} /> },
-    { key: 'createdAt', header: 'Requested', render: (r) => formatDate(r.createdAt) },
-    { key: 'decisionNote', header: 'Decision note', render: (r) => r.decisionNote || '-' },
+    { key: 'createdAt', header: 'Requested', render: (r) => formatDate(r.createdAt), cellClass: 'cell-muted' },
+    {
+      key: 'decisionNote',
+      header: 'Decision note',
+      render: (r) => r.decisionNote || '-',
+      cellClass: 'cell-note',
+      title: (r) => r.decisionNote || undefined,
+    },
     {
       key: 'actions',
       header: '',
+      actions: true,
       render: (r) =>
         r.status === 'PENDING' && (
           <div className="row-actions">
             <button type="button" disabled={busy} onClick={() => approve(r)}>
               Approve
             </button>
-            <button type="button" className="secondary" disabled={busy} onClick={() => setRejecting(r)}>
+            <button type="button" className="secondary reject-btn" disabled={busy} onClick={() => setRejecting(r)}>
               Reject
             </button>
           </div>
@@ -192,16 +211,9 @@ export function AdminDepositRequestsPage() {
       <Alert>{error}</Alert>
       <Alert>{actionError}</Alert>
       <Alert type="success">{success}</Alert>
-      {loading && !data && <Loading />}
-      {data && (
-        <>
-          <DataTable columns={columns} rows={data.content} emptyText="No deposit requests." />
-          <Pagination data={data} onPage={setPage} />
-        </>
-      )}
       {rejecting && (
-        <div className="reject-box">
-          <Form onSubmit={reject} busy={busy} submitText="Confirm reject">
+        <div className="reject-box" ref={rejectBox}>
+          <Form onSubmit={reject} busy={busy} submitText="Confirm reject" submitClass="danger">
             <TextField
               label={`Reason for rejecting request #${rejecting.id} (required)`}
               maxLength={255}
@@ -214,6 +226,19 @@ export function AdminDepositRequestsPage() {
             Cancel
           </button>
         </div>
+      )}
+      {loading && !data && <Loading />}
+      {data && (
+        <>
+          <DataTable
+            columns={columns}
+            rows={data.content}
+            cards
+            rowClass={(r) => (rejecting && rejecting.id === r.id ? 'row-targeted' : undefined)}
+            emptyText="No deposit requests."
+          />
+          <Pagination data={data} onPage={setPage} />
+        </>
       )}
     </section>
   );

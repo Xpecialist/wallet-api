@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useFetch } from '../utils/useFetch.js';
 import { Alert, Loading } from './Feedback.jsx';
 import { SelectField, TextField } from './Fields.jsx';
@@ -26,6 +26,8 @@ export function TransactionBrowser({ fetcher, walletId, currency }) {
   const [size, setSize] = useState('10');
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState(null);
+  const [filtersOpen, setFiltersOpen] = useState(false); // only matters on phones
+  const panelId = useId();
 
   const params = { ...filters, page, size, sort: `${sortBy},${sortDir}` };
   const { data, error, loading } = useFetch(() => fetcher(params), [JSON.stringify(params)]);
@@ -47,6 +49,17 @@ export function TransactionBrowser({ fetcher, walletId, currency }) {
   return (
     <>
       <section className="card">
+        {/* On phones the panel is collapsed behind this button (CSS only hides it; the fields stay in the DOM). */}
+        <button
+          type="button"
+          className="secondary filters-toggle"
+          aria-expanded={filtersOpen}
+          aria-controls={panelId}
+          onClick={() => setFiltersOpen(!filtersOpen)}
+        >
+          Filters
+        </button>
+        <div id={panelId} className={filtersOpen ? 'filter-panel is-open' : 'filter-panel'}>
         <form className="filters" onSubmit={apply}>
           <TextField label="From" type="date" value={draft.from} onChange={set('from')} />
           <TextField label="To" type="date" value={draft.to} onChange={set('to')} />
@@ -65,6 +78,7 @@ export function TransactionBrowser({ fetcher, walletId, currency }) {
           <SelectField label="Sort by" options={SORT_OPTIONS} value={sortBy} onChange={(e) => { setSortBy(e.target.value); setPage(0); }} />
           <SelectField label="Order" options={DIRECTION_OPTIONS} value={sortDir} onChange={(e) => { setSortDir(e.target.value); setPage(0); }} />
           <SelectField label="Page size" options={SIZE_OPTIONS} value={size} onChange={(e) => { setSize(e.target.value); setPage(0); }} />
+        </div>
         </div>
       </section>
 
