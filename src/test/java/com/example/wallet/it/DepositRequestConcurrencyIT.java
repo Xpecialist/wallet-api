@@ -184,8 +184,10 @@ class DepositRequestConcurrencyIT extends ItBase {
         for (int i = 0; i < 10; i++) {
             tasks.add(() -> postJson("/api/deposit-requests", bob, map("amount", new BigDecimal("4")), "same-key"));
         }
-        statuses = runParallel(tasks);
+        List<MvcResult> results = runParallelResults(tasks);
+        statuses = statusesOf(results);
         assertThat(statuses).as(statuses.toString()).allMatch(s -> s == 201);
+        assertThat(distinctBodies(results)).isEqualTo(1);
         assertThat(jdbc.queryForObject("select count(*) from deposit_requests where user_id = "
                 + "(select id from users where username='bob')", Long.class)).isEqualTo(1);
     }

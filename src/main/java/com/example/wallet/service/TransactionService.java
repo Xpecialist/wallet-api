@@ -47,7 +47,9 @@ public class TransactionService {
      * <ol>
      *   <li>The receiver is resolved from {@code receiverWalletId} if present, otherwise from
      *       {@code receiverUsername} (trimmed, case-insensitive). Transferring to oneself is rejected.</li>
-     *   <li>Idempotency: keys are scoped to the sender wallet. If the sender already used the key, the original
+     *   <li>Idempotency (checked after the locks below are held, so two simultaneous requests with the same key
+     *       are serialised and the second one gets the first one's result): keys are scoped to the sender wallet. If
+     *       the sender already used the key, the original
      *       transaction is returned unchanged (no new transfer) when this request has the same receiver, amount and
      *       note; the same key with a different request, or for a different operation type, yields 409. A blank
      *       or over-long key is rejected with 400.</li>
@@ -88,18 +90,6 @@ public class TransactionService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Cannot transfer to yourself");
         }
 
-        if (key != null) {
-            var existing = transactions.findByOwnerAndKey(senderRef.getId(), key);
-            if (existing.isPresent()) {
-                Transaction e = existing.get();
-                if (e.getType() != TransactionType.TRANSFER || !receiverId.equals(e.getReceiverWalletId())
-                        || e.getAmount().compareTo(req.amount()) != 0 || !Objects.equals(e.getNote(), req.note())) {
-                    throw keyReuse();
-                }
-                return TransactionResponse.from(e);
-            }
-        }
-
         // Lock both wallets in id order to avoid deadlocks. The sender wallet exists (looked up above), so a missing one
         // is always the receiver: every unknown receiver, by name or by id, gets the same 404 "Receiver not found".
         Long firstId = Math.min(senderRef.getId(), receiverId);
@@ -110,6 +100,13 @@ public class TransactionService {
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Receiver not found"));
         Wallet sender = first.getId().equals(senderRef.getId()) ? first : second;
         Wallet receiver = sender == first ? second : first;
+
+        // Idempotency check under the sender lock (the sender owns the key): a simultaneous request with the same key
+        // has waited for the first one to commit and now finds its row instead of racing it to the unique index.
+        TransactionResponse replay = replayOrNull(sender.getId(), key, e -> e.getType() == TransactionType.TRANSFER
+                && receiverId.equals(e.getReceiverWalletId()) && e.getAmount().compareTo(req.amount()) == 0
+                && Objects.equals(e.getNote(), req.note()));
+        if (replay != null) return replay;
 
         if (!sender.getCurrency().equals(receiver.getCurrency())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Currency mismatch");
@@ -137,8 +134,9 @@ public class TransactionService {
      * Credits a wallet with money from outside the system (simulated; no payment provider is involved) and records a
      * {@code DEPOSIT} transaction, in one database transaction. The wallet row is locked with
      * {@code SELECT ... FOR UPDATE} while the balance is updated. If a non-blank idempotency key is given and a
-     * deposit of the same amount to the same wallet already exists with that key (keys are scoped to the wallet), that
-     * transaction is returned and nothing is credited. Only reachable through the admin endpoint.
+     * deposit of the same amount to the same wallet already exists with that key (keys are scoped to the wallet; checked
+     * under the wallet lock, so simultaneous replays are serialised), that transaction is returned and nothing is
+     * credited. Only reachable through the admin endpoint.
      *
      * @param walletId       the wallet to credit
      * @param amount         the amount to credit
@@ -150,18 +148,11 @@ public class TransactionService {
     @Transactional
     public TransactionResponse deposit(Long walletId, BigDecimal amount, String idempotencyKey) {
         String key = normalizeKey(idempotencyKey);
-        if (key != null) {
-            var existing = transactions.findByOwnerAndKey(walletId, key);
-            if (existing.isPresent()) {
-                Transaction e = existing.get();
-                if (e.getType() != TransactionType.DEPOSIT || e.getAmount().compareTo(amount) != 0) {
-                    throw keyReuse();
-                }
-                return TransactionResponse.from(e);
-            }
-        }
         Wallet wallet = wallets.findByIdForUpdate(walletId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Wallet not found"));
+        TransactionResponse replay = replayOrNull(wallet.getId(), key,
+                e -> e.getType() == TransactionType.DEPOSIT && e.getAmount().compareTo(amount) == 0);
+        if (replay != null) return replay;
         wallet.setBalance(wallet.getBalance().add(amount));
 
         Transaction t = new Transaction();
@@ -191,18 +182,11 @@ public class TransactionService {
     public TransactionResponse withdraw(String username, BigDecimal amount, String idempotencyKey) {
         String key = normalizeKey(idempotencyKey);
         Long walletId = ownWalletId(username);
-        if (key != null) {
-            var existing = transactions.findByOwnerAndKey(walletId, key);
-            if (existing.isPresent()) {
-                Transaction e = existing.get();
-                if (e.getType() != TransactionType.WITHDRAWAL || e.getAmount().compareTo(amount) != 0) {
-                    throw keyReuse();
-                }
-                return TransactionResponse.from(e);
-            }
-        }
         Wallet wallet = wallets.findByIdForUpdate(walletId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Wallet not found"));
+        TransactionResponse replay = replayOrNull(wallet.getId(), key,
+                e -> e.getType() == TransactionType.WITHDRAWAL && e.getAmount().compareTo(amount) == 0);
+        if (replay != null) return replay;
         if (wallet.getBalance().compareTo(amount) < 0) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "Insufficient funds");
         }
@@ -244,6 +228,25 @@ public class TransactionService {
                     "Idempotency-Key must be at most " + MAX_KEY_LENGTH + " characters");
         }
         return key;
+    }
+
+    /**
+     * Idempotency lookup, to be called while holding the owner's wallet lock. Because the lock serialises all
+     * requests of one owner, the row of an earlier (even simultaneous) request with the same key is already
+     * committed and visible here, so no two requests can both decide "new" and then collide on the unique index.
+     *
+     * @param ownerId     the wallet that owns the key (sender of a transfer or withdrawal, receiver of a deposit)
+     * @param key         the validated key, may be null (no idempotency)
+     * @param samePayload true if the stored transaction was created by an identical request
+     * @return the original transaction, or {@code null} if the owner has not used the key
+     * @throws ApiException 409 if the owner used the key for a different request
+     */
+    private TransactionResponse replayOrNull(Long ownerId, String key, java.util.function.Predicate<Transaction> samePayload) {
+        if (key == null) return null;
+        Transaction e = transactions.findByOwnerAndKey(ownerId, key).orElse(null);
+        if (e == null) return null;
+        if (!samePayload.test(e)) throw keyReuse();
+        return TransactionResponse.from(e);
     }
 
     /** @return the 409 for a key that this owner already used with a different request */

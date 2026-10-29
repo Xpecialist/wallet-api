@@ -4,6 +4,7 @@ import com.example.wallet.dto.PageResponse;
 import com.example.wallet.dto.TransactionFilter;
 import com.example.wallet.dto.TransactionResponse;
 import com.example.wallet.dto.TransferRequest;
+import com.example.wallet.service.IdempotentRetry;
 import com.example.wallet.service.TransactionService;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
@@ -39,7 +40,8 @@ public class TransactionController {
             @Valid @RequestBody TransferRequest req,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication auth) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(service.transfer(auth.getName(), req, idempotencyKey));
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(IdempotentRetry.run(() -> service.transfer(auth.getName(), req, idempotencyKey)));
     }
 
     /**

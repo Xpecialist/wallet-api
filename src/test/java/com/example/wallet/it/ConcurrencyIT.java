@@ -212,11 +212,12 @@ class ConcurrencyIT extends ItBase {
         register("bob");
         List<Callable<MvcResult>> tasks = new ArrayList<>();
         for (int i = 0; i < 10; i++) tasks.add(() -> transfer(a, "bob", "10", "race-key"));
-        List<Integer> statuses = runParallel(tasks);
+        List<MvcResult> results = runParallelResults(tasks);
 
-        // Money must move exactly once and nothing may blow up with a 5xx.
-        assertThat(statuses).as("statuses").allMatch(s -> s == 201 || s == 409, "no 5xx allowed: " + statuses);
-        assertThat(statuses.stream().filter(s -> s == 201).count()).isGreaterThanOrEqualTo(1);
+        // Every simultaneous replay gets the original transaction (201, same body); money moves exactly once.
+        List<Integer> statuses = statusesOf(results);
+        assertThat(statuses).as("statuses").allMatch(s -> s == 201, "only 201 allowed: " + statuses);
+        assertThat(distinctBodies(results)).isEqualTo(1);
         assertThat(txCount()).isEqualTo(1);
         assertThat(balance("alice")).isEqualByComparingTo("90");
         assertThat(balance("bob")).isEqualByComparingTo("110");
@@ -252,8 +253,10 @@ class ConcurrencyIT extends ItBase {
         String adm = adminToken();
         List<Callable<MvcResult>> tasks = new ArrayList<>();
         for (int i = 0; i < 10; i++) tasks.add(() -> adminDeposit(adm, "alice", "10", "dep-race"));
-        List<Integer> statuses = runParallel(tasks);
-        assertThat(statuses).allMatch(s -> s == 201 || s == 409, "no 5xx allowed: " + statuses);
+        List<MvcResult> results = runParallelResults(tasks);
+        List<Integer> statuses = statusesOf(results);
+        assertThat(statuses).allMatch(s -> s == 201, "only 201 allowed: " + statuses);
+        assertThat(distinctBodies(results)).isEqualTo(1);
         assertThat(txCount()).isEqualTo(1);
         assertThat(balance("alice")).isEqualByComparingTo("110");
     }

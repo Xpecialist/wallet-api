@@ -3,6 +3,7 @@ package com.example.wallet.controller;
 import com.example.wallet.dto.AmountRequest;
 import com.example.wallet.dto.TransactionResponse;
 import com.example.wallet.dto.WalletResponse;
+import com.example.wallet.service.IdempotentRetry;
 import com.example.wallet.service.TransactionService;
 import com.example.wallet.service.WalletService;
 import jakarta.validation.Valid;
@@ -45,7 +46,8 @@ public class WalletController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication auth) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(transactionService.withdraw(auth.getName(), req.amount(), idempotencyKey));
+                .body(IdempotentRetry.run(
+                        () -> transactionService.withdraw(auth.getName(), req.amount(), idempotencyKey)));
     }
 
     /**

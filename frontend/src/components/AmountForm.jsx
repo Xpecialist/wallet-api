@@ -1,24 +1,26 @@
 import { useState } from 'react';
-import { newIdempotencyKey } from '../api/client.js';
 import { Alert } from './Feedback.jsx';
 import { Form, TextField } from './Fields.jsx';
+import { useIdempotentSubmit } from '../utils/useIdempotentSubmit.js';
 
 /**
  * Amount-only form (deposit, withdraw, admin deposit). `action(amount, idempotencyKey)` performs the call;
- * `extraFields` renders additional inputs inside the form. Calls `onDone` after a successful submit.
+ * `extraFields` renders additional inputs inside the form; `extraPayload` holds their values, so that changing one
+ * counts as a different request (new Idempotency-Key). Calls `onDone` after a successful submit.
  */
-export function AmountForm({ title, submitText, action, onDone, extraFields }) {
+export function AmountForm({ title, submitText, action, onDone, extraFields, extraPayload }) {
   const [amount, setAmount] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const run = useIdempotentSubmit();
 
   async function submit() {
     setBusy(true);
     setError('');
     setSuccess('');
     try {
-      const result = await action(amount, newIdempotencyKey());
+      const result = await run({ amount, ...extraPayload }, (key) => action(amount, key));
       setSuccess(`Done (transaction #${result.id}).`);
       setAmount('');
       if (onDone) onDone(result);

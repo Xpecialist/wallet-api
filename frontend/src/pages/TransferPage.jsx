@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { api, newIdempotencyKey } from '../api/client.js';
+import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { Alert } from '../components/Feedback.jsx';
 import { Form, SelectField, TextField } from '../components/Fields.jsx';
 import { formatMoney } from '../utils/format.js';
+import { useIdempotentSubmit } from '../utils/useIdempotentSubmit.js';
 
 /** Send money to a username or a wallet id, with an optional note. */
 export default function TransferPage() {
@@ -15,6 +16,7 @@ export default function TransferPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const run = useIdempotentSubmit();
 
   async function submit() {
     setError('');
@@ -30,7 +32,7 @@ export default function TransferPage() {
     else body.receiverWalletId = Number(target);
     if (note.trim()) body.note = note.trim();
     try {
-      const tx = await api.transfer(body, newIdempotencyKey());
+      const tx = await run(body, (key) => api.transfer(body, key));
       setSuccess(`Sent ${formatMoney(tx.amount, wallet?.currency)} (transaction #${tx.id}).`);
       setReceiver('');
       setAmount('');

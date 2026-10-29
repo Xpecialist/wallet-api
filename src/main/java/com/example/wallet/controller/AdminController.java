@@ -6,6 +6,7 @@ import com.example.wallet.dto.TransactionFilter;
 import com.example.wallet.dto.TransactionResponse;
 import com.example.wallet.dto.UserResponse;
 import com.example.wallet.dto.UserStatusRequest;
+import com.example.wallet.service.IdempotentRetry;
 import com.example.wallet.service.TransactionService;
 import com.example.wallet.service.UserService;
 import jakarta.validation.Valid;
@@ -95,6 +96,7 @@ public class AdminController {
             @PathVariable Long id,
             @Valid @RequestBody AmountRequest req,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(transactions.deposit(id, req.amount(), idempotencyKey));
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(IdempotentRetry.run(() -> transactions.deposit(id, req.amount(), idempotencyKey)));
     }
 }

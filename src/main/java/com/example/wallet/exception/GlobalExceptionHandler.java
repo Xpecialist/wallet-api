@@ -79,7 +79,8 @@ public class GlobalExceptionHandler {
 
     /**
      * Handles database constraint violations by SQLState. A unique violation (23505, e.g. a racing duplicate
-     * registration or a simultaneous idempotent replay) is a 409. Out-of-range or too-long values (22003, 22001)
+     * registration; an idempotent replay is answered by the services and, as a safety net, retried by
+     * {@link com.example.wallet.service.IdempotentRetry}) is a 409. Out-of-range or too-long values (22003, 22001)
      * are a 400, and so is text the database cannot store (22021, a NUL character that got past request validation,
      * for example in a query parameter). Anything else (CHECK, foreign key, NOT NULL) indicates a bug, so it is logged
      * and returned as 500 instead of being disguised as a conflict.

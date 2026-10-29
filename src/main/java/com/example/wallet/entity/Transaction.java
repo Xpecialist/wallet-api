@@ -2,7 +2,9 @@ package com.example.wallet.entity;
 
 import jakarta.persistence.*;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 
 /**
  * A movement of funds, stored in the {@code transactions} table: a transfer between two wallets, a deposit into one
@@ -44,7 +46,7 @@ public class Transaction {
 
     /** JPA callback that sets {@code createdAt} to the current time before the first insert. */
     @PrePersist
-    void onCreate() { createdAt = LocalDateTime.now(); }
+    void onCreate() { createdAt = LocalDateTime.now().truncatedTo(ChronoUnit.MICROS); }
 
     /** @return the generated database id, or {@code null} before the transaction is saved */
     public Long getId() { return id; }
@@ -66,8 +68,10 @@ public class Transaction {
     public void setNote(String note) { this.note = note; }
     /** @return the transferred amount */
     public BigDecimal getAmount() { return amount; }
-    /** @param amount the transferred amount */
-    public void setAmount(BigDecimal amount) { this.amount = amount; }
+    /** @param amount the transferred amount (stored with the column scale of 4) */
+    public void setAmount(BigDecimal amount) {
+        this.amount = amount == null ? null : amount.setScale(4, RoundingMode.HALF_UP);
+    }
     /** @return the transaction status */
     public TransactionStatus getStatus() { return status; }
     /** @param status the transaction status */

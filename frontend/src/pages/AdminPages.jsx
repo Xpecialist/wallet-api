@@ -110,6 +110,7 @@ export function AdminDepositPage() {
         title="Deposit to wallet"
         submitText="Deposit"
         action={(amount, key) => api.adminDeposit(walletId, amount, key)}
+        extraPayload={{ walletId }}
         extraFields={
           <TextField label="Wallet ID" type="number" min="1" step="1" required value={walletId} onChange={(e) => setWalletId(e.target.value)} />
         }

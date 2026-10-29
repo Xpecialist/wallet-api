@@ -219,6 +219,7 @@ class TransactionServiceTest {
         when(transactions.findByOwnerAndKey(1L, "k1")).thenReturn(Optional.of(existingTransfer(1, 2, "5", "a")));
         Wallet carol = TestData.wallet(3, TestData.user(30, "carol", Role.USER), "0", "USD");
         when(wallets.findByUserUsername("carol")).thenReturn(Optional.of(carol));
+        when(wallets.findByIdForUpdate(3L)).thenReturn(Optional.of(carol)); // the key is now checked under the locks
 
         assertThatThrownBy(() -> service.transfer("alice",
                 new TransferRequest("bob", null, new BigDecimal("6"), "a"), "k1"))
@@ -236,8 +237,48 @@ class TransactionServiceTest {
         verify(transactions, never()).save(any());
     }
 
-    @Test
-    void transferReplayOfAWithdrawalWithTheSameKeyIs409NotReturnedAsTransfer() {
+@Test
+void theIdempotencyKeyIsLookedUpOnlyAfterTheWalletLocksAreHeld() {
+    when(transactions.findByOwnerAndKey(1L, "k1")).thenReturn(Optional.of(existingTransfer(1, 2, "5", null)));
+    service.transfer("alice", new TransferRequest(null, 2L, new BigDecimal("5"), null), "k1");
+    InOrder order = Mockito.inOrder(wallets, transactions);
+    order.verify(wallets).findByIdForUpdate(1L);
+    order.verify(wallets).findByIdForUpdate(2L);
+    order.verify(transactions).findByOwnerAndKey(1L, "k1");
+
+    Transaction deposit = new Transaction();
+    deposit.setReceiverWalletId(1L);
+    deposit.setAmount(new BigDecimal("5"));
+    deposit.setType(TransactionType.DEPOSIT);
+    deposit.setStatus(TransactionStatus.COMPLETED);
+    when(transactions.findByOwnerAndKey(1L, "k2")).thenReturn(Optional.of(deposit));
+    service.deposit(1L, new BigDecimal("5"), "k2");
+    InOrder depositOrder = Mockito.inOrder(wallets, transactions);
+    depositOrder.verify(wallets).findByIdForUpdate(1L);
+    depositOrder.verify(transactions).findByOwnerAndKey(1L, "k2");
+    assertThat(alice.getBalance()).isEqualByComparingTo("100");
+    verify(transactions, never()).save(any());
+}
+
+@Test
+void withdrawReplayIsAnsweredUnderTheLockEvenWhenTheBalanceNoLongerCoversIt() {
+    alice.setBalance(BigDecimal.ZERO);
+    Transaction withdrawal = new Transaction();
+    withdrawal.setSenderWalletId(1L);
+    withdrawal.setAmount(new BigDecimal("50"));
+    withdrawal.setType(TransactionType.WITHDRAWAL);
+    withdrawal.setStatus(TransactionStatus.COMPLETED);
+    when(transactions.findByOwnerAndKey(1L, "k3")).thenReturn(Optional.of(withdrawal));
+
+    TransactionResponse r = service.withdraw("alice", new BigDecimal("50"), "k3");
+
+    assertThat(r.type()).isEqualTo("WITHDRAWAL");
+    assertThat(alice.getBalance()).isEqualByComparingTo("0");
+    verify(transactions, never()).save(any());
+}
+
+@Test
+void transferReplayOfAWithdrawalWithTheSameKeyIs409NotReturnedAsTransfer() {
         Transaction withdrawal = new Transaction();
         withdrawal.setSenderWalletId(1L);
         withdrawal.setAmount(new BigDecimal("5"));

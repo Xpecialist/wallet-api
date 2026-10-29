@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, newIdempotencyKey } from '../api/client.js';
+import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { DataTable } from '../components/DataTable.jsx';
 import { Alert, Loading } from '../components/Feedback.jsx';
@@ -8,6 +8,7 @@ import { Pagination } from '../components/Pagination.jsx';
 import { StatusBadge } from '../components/StatusBadge.jsx';
 import { formatDate, formatMoney } from '../utils/format.js';
 import { useFetch } from '../utils/useFetch.js';
+import { useIdempotentSubmit } from '../utils/useIdempotentSubmit.js';
 
 const STATUS_OPTIONS = [['', 'Any'], ['PENDING', 'Pending'], ['APPROVED', 'Approved'], ['REJECTED', 'Rejected']];
 
@@ -18,6 +19,7 @@ export default function DepositsPage() {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
+  const run = useIdempotentSubmit();
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [status, setStatus] = useState('');
@@ -41,7 +43,7 @@ export default function DepositsPage() {
     const body = { amount };
     if (note.trim()) body.note = note.trim();
     try {
-      const created = await api.createDepositRequest(body, newIdempotencyKey());
+      const created = await run(body, (key) => api.createDepositRequest(body, key));
       setSuccess(`Request #${created.id} sent. Your balance changes only after an admin approves it.`);
       setAmount('');
       setNote('');

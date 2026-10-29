@@ -5,6 +5,7 @@ import com.example.wallet.dto.DepositRequestResponse;
 import com.example.wallet.dto.PageResponse;
 import com.example.wallet.entity.DepositRequestStatus;
 import com.example.wallet.service.DepositRequestService;
+import com.example.wallet.service.IdempotentRetry;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -41,7 +42,8 @@ public class DepositRequestController {
             @Valid @RequestBody CreateDepositRequest req,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication auth) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(service.create(auth.getName(), req, idempotencyKey));
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(IdempotentRetry.run(() -> service.create(auth.getName(), req, idempotencyKey)));
     }
 
     /**

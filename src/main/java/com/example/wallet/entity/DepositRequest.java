@@ -2,7 +2,9 @@ package com.example.wallet.entity;
 
 import jakarta.persistence.*;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 
 /**
  * A user's request to have money added to their wallet, stored in the {@code deposit_requests} table. Nothing is
@@ -53,7 +55,7 @@ public class DepositRequest {
 
     /** JPA callback that sets {@code createdAt} to the current time before the first insert. */
     @PrePersist
-    void onCreate() { createdAt = LocalDateTime.now(); }
+    void onCreate() { createdAt = LocalDateTime.now().truncatedTo(ChronoUnit.MICROS); }
 
     /** @return the generated database id, or {@code null} before the request is saved */
     public Long getId() { return id; }
@@ -67,8 +69,10 @@ public class DepositRequest {
     public void setUser(User user) { this.user = user; }
     /** @return the requested amount */
     public BigDecimal getAmount() { return amount; }
-    /** @param amount the requested amount */
-    public void setAmount(BigDecimal amount) { this.amount = amount; }
+    /** @param amount the requested amount (stored with the column scale of 4) */
+    public void setAmount(BigDecimal amount) {
+        this.amount = amount == null ? null : amount.setScale(4, RoundingMode.HALF_UP);
+    }
     /** @return the note or bank transfer reference of the requester, or {@code null} */
     public String getNote() { return note; }
     /** @param note the note (at most 255 characters), or {@code null} */

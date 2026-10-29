@@ -10,8 +10,17 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import java.math.BigDecimal;
 import java.sql.Connection;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -143,5 +152,48 @@ abstract class ItBase {
 
     protected MvcResult withdraw(String token, String amount, String idemKey) throws Exception {
         return postJson("/api/wallets/me/withdraw", token, map("amount", new BigDecimal(amount)), idemKey);
+    }
+
+    /**
+     * Runs all tasks at the same instant on separate threads and returns the full responses (status and body), in
+     * task order. A task that throws fails the test, since a real client would see a 5xx.
+     */
+    protected List<MvcResult> runParallelResults(List<Callable<MvcResult>> tasks) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(tasks.size());
+        CountDownLatch ready = new CountDownLatch(tasks.size());
+        CountDownLatch go = new CountDownLatch(1);
+        List<Future<MvcResult>> futures = new ArrayList<>();
+        for (Callable<MvcResult> t : tasks) {
+            futures.add(pool.submit(() -> {
+                ready.countDown();
+                go.await();
+                return t.call();
+            }));
+        }
+        ready.await();
+        go.countDown();
+        List<MvcResult> results = new ArrayList<>();
+        try {
+            for (Future<MvcResult> f : futures) results.add(f.get(90, TimeUnit.SECONDS));
+        } catch (TimeoutException e) {
+            throw new AssertionError("Parallel operations did not finish in 90s: DEADLOCK/HANG", e);
+        } finally {
+            pool.shutdownNow();
+        }
+        return results;
+    }
+
+    protected static List<Integer> statusesOf(List<MvcResult> results) {
+        return results.stream().map(r -> r.getResponse().getStatus()).toList();
+    }
+
+    protected static long distinctBodies(List<MvcResult> results) {
+        return results.stream().map(r -> {
+            try {
+                return r.getResponse().getContentAsString();
+            } catch (java.io.UnsupportedEncodingException e) {
+                throw new IllegalStateException(e);
+            }
+        }).distinct().count();
     }
 }

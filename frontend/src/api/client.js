@@ -15,7 +15,18 @@ export class ApiError extends Error {
     super(message);
     this.status = status;
     this.retryAfter = retryAfter;
+    this.hasBody = true; // false only for a response without a JSON error body (set by parseError)
   }
+}
+
+/**
+ * True when the outcome of a request is unknown, so repeating it with the SAME Idempotency-Key is the safe retry:
+ * no response at all (status 0), a gateway/availability status (502, 503, 504) or a 500 that carried no JSON error
+ * body (not our server's answer). Any other answer, including every 4xx, is definite.
+ */
+export function isIndeterminate(e) {
+  if (!(e instanceof ApiError)) return false;
+  return e.status === 0 || e.status === 502 || e.status === 503 || e.status === 504 || (e.status === 500 && !e.hasBody);
 }
 
 /** Stores the JWT in memory and sessionStorage (pass null to clear it). */
@@ -32,7 +43,7 @@ export function setUnauthorizedHandler(fn) {
   onUnauthorized = fn;
 }
 
-/** Generates a fresh Idempotency-Key; call once per form submit. */
+/** Generates a fresh Idempotency-Key; see useIdempotentSubmit for when a form keeps one across retries. */
 export function newIdempotencyKey() {
   return crypto.randomUUID();
 }
@@ -64,13 +75,19 @@ async function parseError(res) {
     return new ApiError(429, message, wait);
   }
   let message = `Request failed (${res.status})`;
+  let hasBody = false;
   try {
     const body = await res.json();
-    if (body && body.error) message = body.error;
+    if (body && body.error) {
+      message = body.error;
+      hasBody = true;
+    }
   } catch {
     // empty or non-JSON body: keep the generic message
   }
-  return new ApiError(res.status, message);
+  const error = new ApiError(res.status, message);
+  error.hasBody = hasBody;
+  return error;
 }
 
 async function request(method, path, { body, params, idempotencyKey } = {}) {
