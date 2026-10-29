@@ -4,8 +4,11 @@ import com.example.wallet.dto.AuthResponse;
 import com.example.wallet.dto.ChangePasswordRequest;
 import com.example.wallet.dto.UpdateProfileRequest;
 import com.example.wallet.dto.UserResponse;
+import com.example.wallet.exception.ApiException;
+import com.example.wallet.security.AuthUser;
 import com.example.wallet.service.UserService;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
@@ -50,6 +53,9 @@ public class UserController {
      */
     @PostMapping("/password")
     public AuthResponse changePassword(@Valid @RequestBody ChangePasswordRequest req, Authentication auth) {
-        return userService.changePassword(auth.getName(), req);
+        if (!(auth.getPrincipal() instanceof AuthUser caller)) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "Not authenticated");
+        }
+        return userService.changePassword(auth.getName(), caller.getTokenVersion(), req);
     }
 }

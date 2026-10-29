@@ -3,6 +3,9 @@ package com.example.wallet.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -47,6 +50,24 @@ class UserServiceTest {
         alice = TestData.user(1, "alice", Role.USER);
         when(users.findByUsername("alice")).thenReturn(Optional.of(alice));
         when(users.save(any(User.class))).thenAnswer(i -> i.getArgument(0));
+        // the targeted UPDATEs, simulated on the entity so the reloaded user shows what the database would hold
+        when(users.findById(1L)).thenReturn(Optional.of(alice));
+        when(users.updateEmail(eq(1L), anyString())).thenAnswer(i -> {
+            alice.setEmail(i.getArgument(1));
+            return 1;
+        });
+        when(users.changePasswordIfCurrent(eq(1L), anyLong(), anyString())).thenAnswer(i -> {
+            alice.setPasswordHash(i.getArgument(2));
+            return 1;
+        });
+        when(users.enable(1L)).thenAnswer(i -> {
+            alice.setEnabled(true);
+            return 1;
+        });
+        when(users.disableAndRevoke(1L)).thenAnswer(i -> {
+            alice.setEnabled(false);
+            return 1;
+        });
     }
 
     private static void assertStatus(Throwable t, HttpStatus s) {
@@ -83,6 +104,8 @@ class UserServiceTest {
                 .satisfies(t -> assertStatus(t, HttpStatus.CONFLICT));
         assertThat(alice.getEmail()).isEqualTo("alice@example.com");
         verify(users, never()).save(any());
+        verify(users, never()).changePasswordIfCurrent(any(), anyLong(), any());
+        verify(users, never()).updateEmail(any(), any());
     }
 
     @Test
@@ -103,24 +126,27 @@ class UserServiceTest {
     void changePasswordHashesNewPasswordWhenCurrentMatches() {
         when(encoder.matches("old", "hash-alice")).thenReturn(true);
         when(encoder.encode("newpassword")).thenReturn("new-hash");
-        service.changePassword("alice", new ChangePasswordRequest("old", "newpassword"));
+        service.changePassword("alice", 0L, new ChangePasswordRequest("old", "newpassword"));
         assertThat(alice.getPasswordHash()).isEqualTo("new-hash");
-        verify(users).save(alice);
+        verify(users).changePasswordIfCurrent(1L, 0L, "new-hash");
+        verify(users, never()).save(any());
     }
 
     @Test
     void changePasswordWithWrongCurrentIs400AndKeepsHash() {
         when(encoder.matches("bad", "hash-alice")).thenReturn(false);
-        assertThatThrownBy(() -> service.changePassword("alice", new ChangePasswordRequest("bad", "newpassword")))
+        assertThatThrownBy(() -> service.changePassword("alice", 0L, new ChangePasswordRequest("bad", "newpassword")))
                 .satisfies(t -> assertStatus(t, HttpStatus.BAD_REQUEST));
         assertThat(alice.getPasswordHash()).isEqualTo("hash-alice");
         verify(users, never()).save(any());
+        verify(users, never()).changePasswordIfCurrent(any(), anyLong(), any());
+        verify(users, never()).updateEmail(any(), any());
     }
 
     @Test
     void changePasswordUnknownUserIs404() {
         when(users.findByUsername("ghost")).thenReturn(Optional.empty());
-        assertThatThrownBy(() -> service.changePassword("ghost", new ChangePasswordRequest("a", "bbbbbbbb")))
+        assertThatThrownBy(() -> service.changePassword("ghost", 0L, new ChangePasswordRequest("a", "bbbbbbbb")))
                 .satisfies(t -> assertStatus(t, HttpStatus.NOT_FOUND));
     }
 
@@ -163,11 +189,13 @@ class UserServiceTest {
     @Test
     void changePasswordRejectsNewPasswordEqualToCurrent() {
         when(encoder.matches("samepassword", "hash-alice")).thenReturn(true);
-        assertThatThrownBy(() -> service.changePassword("alice",
+        assertThatThrownBy(() -> service.changePassword("alice", 0L,
                 new ChangePasswordRequest("samepassword", "samepassword")))
                 .satisfies(t -> assertStatus(t, HttpStatus.BAD_REQUEST));
         assertThat(alice.getPasswordHash()).isEqualTo("hash-alice");
         verify(users, never()).save(any());
+        verify(users, never()).changePasswordIfCurrent(any(), anyLong(), any());
+        verify(users, never()).updateEmail(any(), any());
     }
 
     @Test
@@ -198,46 +226,86 @@ class UserServiceTest {
     }
 
     @Test
-    void changePasswordBumpsTheVersionThenIssuesTheTokenForTheNewVersion() {
+    void changePasswordIsOneConditionalUpdateThenIssuesTheTokenForTheNextVersion() {
         when(encoder.matches("old", "hash-alice")).thenReturn(true);
         when(encoder.encode("newpassword")).thenReturn("new-hash");
-        when(users.findTokenVersion(1L)).thenReturn(4L);
-        when(jwt.generateToken("alice", 4L)).thenReturn("fresh");
+        when(jwt.generateToken("alice", 1L)).thenReturn("fresh");
 
-        AuthResponse r = service.changePassword("alice", new ChangePasswordRequest("old", "newpassword"));
+        AuthResponse r = service.changePassword("alice", 0L, new ChangePasswordRequest("old", "newpassword"));
 
         assertThat(r.token()).isEqualTo("fresh");
         var order = org.mockito.Mockito.inOrder(users, jwt);
-        order.verify(users).save(alice);
-        order.verify(users).bumpTokenVersion(1L);
-        order.verify(users).findTokenVersion(1L);
-        order.verify(jwt).generateToken("alice", 4L);
+        order.verify(users).changePasswordIfCurrent(1L, 0L, "new-hash");
+        order.verify(jwt).generateToken("alice", 1L);
+        verify(users, never()).bumpTokenVersion(any());
+        verify(users, never()).save(any());
     }
 
     @Test
-    void failedPasswordChangesNeverBumpTheVersion() {
+    void aTokenThatIsNoLongerCurrentCannotChangeThePasswordOrGetAFreshToken() {
+        when(encoder.matches("old", "hash-alice")).thenReturn(true);
+        // the version moved on after the request was authenticated (a logout, another change)
+        assertThatThrownBy(() -> service.changePassword("alice", 7L, new ChangePasswordRequest("old", "newpassword")))
+                .satisfies(t -> assertStatus(t, HttpStatus.UNAUTHORIZED));
+        verify(encoder, never()).matches(any(), any());
+        verify(users, never()).changePasswordIfCurrent(any(), anyLong(), any());
+        verify(jwt, never()).generateToken(any(), anyLong());
+    }
+
+    @Test
+    void aDisabledAccountCannotChangeThePassword() {
+        alice.setEnabled(false);
+        assertThatThrownBy(() -> service.changePassword("alice", 0L, new ChangePasswordRequest("old", "newpassword")))
+                .satisfies(t -> assertStatus(t, HttpStatus.UNAUTHORIZED));
+        verify(users, never()).changePasswordIfCurrent(any(), anyLong(), any());
+        verify(jwt, never()).generateToken(any(), anyLong());
+    }
+
+    @Test
+    void whenTheConditionalUpdateMatchesNoRowTheChangeFailsWith401AndNoToken() {
+        when(encoder.matches("old", "hash-alice")).thenReturn(true);
+        when(encoder.encode("newpassword")).thenReturn("new-hash");
+        org.mockito.Mockito.doReturn(0).when(users).changePasswordIfCurrent(1L, 0L, "new-hash"); // lost the race at the database
+        assertThatThrownBy(() -> service.changePassword("alice", 0L, new ChangePasswordRequest("old", "newpassword")))
+                .satisfies(t -> assertStatus(t, HttpStatus.UNAUTHORIZED));
+        verify(jwt, never()).generateToken(any(), anyLong());
+    }
+
+    @Test
+    void failedPasswordChangesNeverTouchTheRowOrIssueATokenOrBump() {
         when(encoder.matches("bad", "hash-alice")).thenReturn(false);
         when(encoder.matches("same", "hash-alice")).thenReturn(true);
-        assertThatThrownBy(() -> service.changePassword("alice", new ChangePasswordRequest("bad", "newpassword")))
+        assertThatThrownBy(() -> service.changePassword("alice", 0L, new ChangePasswordRequest("bad", "newpassword")))
                 .isInstanceOf(ApiException.class);
-        assertThatThrownBy(() -> service.changePassword("alice", new ChangePasswordRequest("same", "same")))
+        assertThatThrownBy(() -> service.changePassword("alice", 0L, new ChangePasswordRequest("same", "same")))
                 .isInstanceOf(ApiException.class);
         verify(users, never()).bumpTokenVersion(any());
-        verify(jwt, never()).generateToken(any(), org.mockito.ArgumentMatchers.anyLong());
+        verify(users, never()).changePasswordIfCurrent(any(), anyLong(), any());
+        verify(jwt, never()).generateToken(any(), anyLong());
     }
 
     @Test
-    void disablingBumpsTheVersionButEnablingAndSelfDisableDoNot() {
+    void disablingRevokesInOneStatementAndEnablingAndSelfDisableDoNot() {
         when(users.findById(1L)).thenReturn(Optional.of(alice));
         service.setEnabled(1L, true, "admin");
-        verify(users, never()).bumpTokenVersion(any());
+        verify(users).enable(1L);
+        verify(users, never()).disableAndRevoke(any());
 
         service.setEnabled(1L, false, "admin");
-        verify(users).bumpTokenVersion(1L);
+        verify(users).disableAndRevoke(1L);
 
         User admin = TestData.user(2, "admin", Role.ADMIN);
         when(users.findById(2L)).thenReturn(Optional.of(admin));
         assertThatThrownBy(() -> service.setEnabled(2L, false, "admin")).isInstanceOf(ApiException.class);
-        verify(users, never()).bumpTokenVersion(2L);
+        verify(users, never()).disableAndRevoke(2L);
+        verify(users, never()).save(any());
+    }
+
+    @Test
+    void emailChangeWritesOnlyTheEmailColumn() {
+        when(users.existsByEmail("new@example.com")).thenReturn(false);
+        service.updateEmail("alice", new UpdateProfileRequest("new@example.com"));
+        verify(users).updateEmail(1L, "new@example.com");
+        verify(users, never()).save(any());
     }
 }

@@ -49,11 +49,53 @@ public interface UserRepository extends JpaRepository<User, Long> {
     int bumpTokenVersion(@Param("id") Long id);
 
     /**
-     * Reads the current token version straight from the database (not from the persistence context).
+     * Changes the password and revokes every token (token version + 1) in ONE statement, but only while the caller's
+     * token is still current and the account enabled: a token revoked or an account disabled after the request passed
+     * authentication matches no row, so a revoked session cannot finish a password change and a disabled account is
+     * never touched. Only these two columns are written, so a concurrent email change or disable is never overwritten.
+     * Concurrent changes with the same token serialize on the row lock; the loser re-checks the version and matches
+     * nothing.
+     *
+     * @param id           the user id
+     * @param tokenVersion the version the caller's token carried (the stored version it was checked against)
+     * @param hash         the BCrypt hash of the new password
+     * @return 1 if changed, 0 if the token is no longer current, the account is disabled or the user does not exist
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = "update users set password_hash = :hash, token_version = token_version + 1 "
+            + "where id = :id and token_version = :tv and enabled = true", nativeQuery = true)
+    int changePasswordIfCurrent(@Param("id") Long id, @Param("tv") long tokenVersion, @Param("hash") String hash);
+
+    /**
+     * Changes only the email address (a targeted UPDATE, so nothing else of the row is written back from a stale copy).
+     *
+     * @param id    the user id
+     * @param email the new, trimmed email
+     * @return the number of rows changed (1, or 0 if the user does not exist)
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = "update users set email = :email where id = :id", nativeQuery = true)
+    int updateEmail(@Param("id") Long id, @Param("email") String email);
+
+    /**
+     * Re-enables the user (only the {@code enabled} column; the token version is not changed).
      *
      * @param id the user id
-     * @return the stored token version
+     * @return the number of rows changed (1, or 0 if the user does not exist)
      */
-    @Query("select u.tokenVersion from User u where u.id = :id")
-    long findTokenVersion(@Param("id") Long id);
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = "update users set enabled = true where id = :id", nativeQuery = true)
+    int enable(@Param("id") Long id);
+
+    /**
+     * Disables the user and revokes every token (token version + 1) in ONE statement, so there is no moment with a
+     * disabled user whose old tokens still match, and a racing password or email change cannot undo it.
+     *
+     * @param id the user id
+     * @return the number of rows changed (1, or 0 if the user does not exist)
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = "update users set enabled = false, token_version = token_version + 1 where id = :id",
+            nativeQuery = true)
+    int disableAndRevoke(@Param("id") Long id);
 }

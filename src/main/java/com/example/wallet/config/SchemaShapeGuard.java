@@ -23,6 +23,10 @@ public class SchemaShapeGuard {
     static final List<String> CONSTRAINTS = List.of("chk_tx_type_wallets", "chk_dr_decision", "wallets_balance_check",
             "transactions_amount_check", "deposit_requests_amount_check", "deposit_requests_status_check");
 
+    /** CHECK constraints added by V3 (checked only by {@link #verifyCurrent}). */
+    static final List<String> V3_CONSTRAINTS = List.of("chk_tx_status", "chk_users_role", "chk_wallets_currency",
+            "chk_tx_no_self_transfer");
+
     @Bean
     FlywayMigrationStrategy schemaShapeGuardMigrationStrategy() {
         return flyway -> {
@@ -46,7 +50,7 @@ public class SchemaShapeGuard {
         check(jdbc, headline, false);
     }
 
-    /** Like {@link #verify} plus what V2 adds ({@code users.token_version}); used after every migration. */
+    /** Like {@link #verify} plus what V2 ({@code users.token_version}) and V3 (CHECK constraints) add; used after every migration. */
     public static void verifyCurrent(JdbcTemplate jdbc, String headline) {
         check(jdbc, headline, true);
     }
@@ -68,6 +72,12 @@ public class SchemaShapeGuard {
         for (String c : CONSTRAINTS) {
             if (jdbc.queryForObject("select count(*) from pg_constraint where conname = ? and connamespace = "
                     + "current_schema()::regnamespace", Long.class, c) == 0) problems.add("missing constraint " + c);
+        }
+        if (current) {
+            for (String c : V3_CONSTRAINTS) {
+                if (jdbc.queryForObject("select count(*) from pg_constraint where conname = ? and connamespace = "
+                        + "current_schema()::regnamespace", Long.class, c) == 0) problems.add("missing constraint " + c);
+            }
         }
         if (hasTable(jdbc, "transactions")) {
             if (jdbc.queryForObject("select count(*) from pg_constraint where conrelid = 'transactions'::regclass "

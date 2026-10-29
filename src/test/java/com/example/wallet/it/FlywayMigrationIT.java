@@ -102,10 +102,10 @@ class FlywayMigrationIT {
         MigrateResult r = flyway().migrate();
 
         assertThat(r.success).isTrue();
-        assertThat(r.migrationsExecuted).isEqualTo(2);
+        assertThat(r.migrationsExecuted).isEqualTo(3);
         for (String t : TABLES) assertThat(tableExists(t)).as("created: " + t).isTrue();
         assertThat(jdbc.queryForList("select version from flyway_schema_history where success order by installed_rank", String.class))
-                .containsExactly("1", "2");
+                .containsExactly("1", "2", "3");
         assertThat(jdbc.queryForObject("select type from flyway_schema_history where version='1'", String.class))
                 .as("V1 really ran, it was not just baselined").isEqualTo("SQL");
         SchemaShapeGuard.verifyCurrent(jdbc, "shape");
@@ -118,7 +118,7 @@ class FlywayMigrationIT {
         }
         assertThat(jdbc.queryForObject("select type from flyway_schema_history where version='1'", String.class))
                 .isEqualTo("SQL");
-        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(2);
+        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(3);
     }
 
     // ---- (b) existing database with the current schema and no history ----------------------------------------
@@ -133,9 +133,10 @@ class FlywayMigrationIT {
             assertThat(ctx.isRunning()).as("started, so Hibernate validate passed").isTrue();
         }
 
-        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(2);
+        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(3);
         assertThat(jdbc.queryForObject("select type from flyway_schema_history where version='1'", String.class)).isEqualTo("BASELINE");
         assertThat(jdbc.queryForObject("select type from flyway_schema_history where version='2'", String.class)).isEqualTo("SQL");
+        assertThat(jdbc.queryForObject("select type from flyway_schema_history where version='3'", String.class)).isEqualTo("SQL");
         assertThat(count("select count(*) from users where token_version = 0")).as("existing rows start at 0").isEqualTo(3);
         assertThat(count("select count(*) from users")).isEqualTo(3);
         assertThat(count("select count(*) from wallets")).isEqualTo(3);
@@ -172,7 +173,7 @@ class FlywayMigrationIT {
     }
 
     @Test
-    void v1OnlyDatabaseWithDataMigratesToV2KeepingEverythingAndStartingTokenVersionsAtZero() {
+    void v1OnlyDatabaseWithDataMigratesForwardKeepingEverythingAndStartingTokenVersionsAtZero() {
         Flyway v1 = Flyway.configure().dataSource(ds).locations("classpath:db/migration").target("1").load();
         assertThat(v1.migrate().migrationsExecuted).isEqualTo(1);
         insertSomeData();
@@ -183,9 +184,9 @@ class FlywayMigrationIT {
         MigrateResult r = flyway().migrate();
 
         assertThat(r.success).isTrue();
-        assertThat(r.migrationsExecuted).isEqualTo(1);
+        assertThat(r.migrationsExecuted).isEqualTo(2);
         assertThat(jdbc.queryForList("select version from flyway_schema_history where success order by installed_rank",
-                String.class)).containsExactly("1", "2");
+                String.class)).containsExactly("1", "2", "3");
         assertThat(count("select count(*) from users")).isEqualTo(3);
         assertThat(count("select count(*) from wallets")).isEqualTo(3);
         assertThat(count("select count(*) from transactions")).isEqualTo(3);
@@ -213,6 +214,125 @@ class FlywayMigrationIT {
                 .hasMessageContaining("missing column users.token_version");
     }
 
+    // ---- V3: more CHECK constraints ----------------------------------------------------------------------------
+
+    private static final List<String> V3_CONSTRAINTS =
+            List.of("chk_tx_status", "chk_users_role", "chk_wallets_currency", "chk_tx_no_self_transfer");
+
+    private void migrateTo(String version) {
+        Flyway.configure().dataSource(ds).locations("classpath:db/migration").target(version).load().migrate();
+    }
+
+    @Test
+    void v2DatabaseWithDataMigratesToV3KeepingEverything() {
+        migrateTo("2");
+        insertSomeData();
+        jdbc.update("update users set role='ADMIN' where id=3");
+        jdbc.update("insert into transactions(sender_wallet_id,amount,type,status) values (2,1,'WITHDRAWAL','PENDING')");
+        jdbc.update("insert into transactions(sender_wallet_id,receiver_wallet_id,amount,type,status) "
+                + "values (1,2,1,'TRANSFER','FAILED')");
+        for (String c : V3_CONSTRAINTS) {
+            assertThat(count("select count(*) from pg_constraint where conname='" + c + "'")).as("V2 has no " + c).isZero();
+        }
+        long tx = count("select count(*) from transactions");
+
+        MigrateResult r = flyway().migrate();
+
+        assertThat(r.success).isTrue();
+        assertThat(r.migrationsExecuted).isEqualTo(1);
+        assertThat(jdbc.queryForList("select version from flyway_schema_history where success order by installed_rank",
+                String.class)).containsExactly("1", "2", "3");
+        assertThat(count("select count(*) from users")).isEqualTo(3);
+        assertThat(count("select count(*) from wallets")).isEqualTo(3);
+        assertThat(count("select count(*) from transactions")).isEqualTo(tx);
+        assertThat(jdbc.queryForObject("select sum(balance) from wallets", BigDecimal.class)).isEqualByComparingTo("300");
+        for (String c : V3_CONSTRAINTS) {
+            assertThat(count("select count(*) from pg_constraint where conname='" + c + "' and convalidated"))
+                    .as(c + " exists and is validated").isEqualTo(1);
+        }
+        SchemaShapeGuard.verifyCurrent(jdbc, "current shape");
+        try (ConfigurableApplicationContext ctx = startApp()) {
+            assertThat(ctx.isRunning()).as("Hibernate validate and the shape guard pass after V3").isTrue();
+        }
+    }
+
+    @Test
+    void v3RefusesDataThatBreaksARuleAndLeavesTheDatabaseAtV2() {
+        migrateTo("2");
+        insertSomeData();
+        jdbc.update("update transactions set status='DONE' where idempotency_key='k1'");
+
+        assertThatThrownBy(() -> flyway().migrate()).hasStackTraceContaining("chk_tx_status");
+
+        assertThat(jdbc.queryForList("select version from flyway_schema_history where success order by installed_rank",
+                String.class)).as("nothing of V3 was recorded").containsExactly("1", "2");
+        for (String c : V3_CONSTRAINTS) {
+            assertThat(count("select count(*) from pg_constraint where conname='" + c + "'")).as(c).isZero();
+        }
+        assertThat(count("select count(*) from transactions")).as("data untouched").isEqualTo(3);
+    }
+
+    @Test
+    void v3ConstraintsRejectUnknownStatusRoleCurrencyAndSelfTransfers() {
+        flyway().migrate();
+        insertSomeData();
+
+        for (String status : List.of("DONE", "completed", "", "PENDING ", "SETTLED")) {
+            assertThatThrownBy(() -> jdbc.update("insert into transactions(receiver_wallet_id,amount,type,status) "
+                    + "values (1,1,'DEPOSIT','" + status + "')")).as("status '" + status + "'")
+                    .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("chk_tx_status");
+        }
+        for (String status : List.of("PENDING", "COMPLETED", "FAILED")) {
+            jdbc.update("insert into transactions(receiver_wallet_id,amount,type,status) values (1,1,'DEPOSIT','"
+                    + status + "')");
+        }
+        assertThatThrownBy(() -> jdbc.update("update transactions set status='DONE' where id=1"))
+                .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("chk_tx_status");
+
+        for (String role : List.of("SUPER", "admin", "user", "ROLE_ADMIN", "")) {
+            assertThatThrownBy(() -> jdbc.update("insert into users(username,email,password_hash,role) values "
+                    + "('r" + role.hashCode() + "','r" + role.hashCode() + "@example.com','h','" + role + "')"))
+                    .as("role '" + role + "'").isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("chk_users_role");
+        }
+        jdbc.update("insert into users(username,email,password_hash,role) values ('adm','adm@example.com','h','ADMIN')");
+        assertThatThrownBy(() -> jdbc.update("update users set role='SUPER' where id=1"))
+                .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("chk_users_role");
+
+        for (String currency : List.of("usd", "Usd", "US", "U$D", "12A", " US", "")) {
+            assertThatThrownBy(() -> jdbc.update("update wallets set currency='" + currency + "' where id=1"))
+                    .as("currency '" + currency + "'").isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("chk_wallets_currency");
+        }
+        jdbc.update("update wallets set currency='EUR' where id=1");
+        assertThat(jdbc.queryForObject("select currency from wallets where id=1", String.class)).isEqualTo("EUR");
+
+        assertThatThrownBy(() -> jdbc.update("insert into transactions(sender_wallet_id,receiver_wallet_id,amount,type,"
+                + "status) values (1,1,1,'TRANSFER','COMPLETED')"))
+                .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("chk_tx_no_self_transfer");
+        assertThatThrownBy(() -> jdbc.update("update transactions set receiver_wallet_id=1 where id=1"))
+                .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("chk_tx_no_self_transfer");
+        // wallets that differ, and rows where one side is null, stay valid
+        jdbc.update("insert into transactions(sender_wallet_id,receiver_wallet_id,amount,type,status) "
+                + "values (1,3,1,'TRANSFER','COMPLETED')");
+        jdbc.update("insert into transactions(sender_wallet_id,amount,type,status) values (1,1,'WITHDRAWAL','COMPLETED')");
+    }
+
+    @Test
+    void currentShapeCheckNamesADroppedV3Constraint() {
+        flyway().migrate();
+        SchemaShapeGuard.verifyCurrent(jdbc, "shape");
+        SchemaShapeGuard.verify(jdbc, "V1 shape");
+        jdbc.execute("alter table transactions drop constraint chk_tx_status");
+        jdbc.execute("alter table users drop constraint chk_users_role");
+
+        SchemaShapeGuard.verify(jdbc, "the V1 baseline check does not know V3");
+        assertThatThrownBy(() -> SchemaShapeGuard.verifyCurrent(jdbc, "Drifted"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("missing constraint chk_tx_status")
+                .hasMessageContaining("missing constraint chk_users_role");
+    }
+
     // ---- (c) repeated migration ------------------------------------------------------------------------------
 
     @Test
@@ -226,7 +346,7 @@ class FlywayMigrationIT {
 
         assertThat(second.success).isTrue();
         assertThat(second.migrationsExecuted).isZero();
-        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(2);
+        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(3);
         assertThat(count("select count(*) from pg_indexes where schemaname=current_schema()")).isEqualTo(indexes);
         assertThat(count("select count(*) from pg_constraint")).isEqualTo(constraints);
         assertThat(count("select count(*) from users")).as("data untouched").isEqualTo(1);
@@ -236,7 +356,7 @@ class FlywayMigrationIT {
     void applicationRestartOnAMigratedDatabaseChangesNothing() {
         try (ConfigurableApplicationContext ctx = startApp()) { assertThat(ctx.isRunning()).isTrue(); }
         try (ConfigurableApplicationContext ctx = startApp()) { assertThat(ctx.isRunning()).isTrue(); }
-        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(2);
+        assertThat(count("select count(*) from flyway_schema_history")).isEqualTo(3);
     }
 
     // ---- (d) schema shape ------------------------------------------------------------------------------------
@@ -253,7 +373,8 @@ class FlywayMigrationIT {
                     + i + "'")).as("index " + i).isEqualTo(1);
         }
         for (String c : List.of("chk_tx_type_wallets", "chk_dr_decision", "wallets_balance_check",
-                "transactions_amount_check", "deposit_requests_amount_check", "deposit_requests_status_check")) {
+                "transactions_amount_check", "deposit_requests_amount_check", "deposit_requests_status_check",
+                "chk_tx_status", "chk_users_role", "chk_wallets_currency", "chk_tx_no_self_transfer")) {
             assertThat(count("select count(*) from pg_constraint where conname='" + c + "'")).as(c).isEqualTo(1);
         }
         assertThat(count("select count(*) from pg_constraint where conrelid='transactions'::regclass "
@@ -326,5 +447,6 @@ class FlywayMigrationIT {
         assertThat(new ClassPathResource("schema.sql").exists()).isFalse();
         assertThat(new ClassPathResource("db/migration/V1__baseline.sql").exists()).isTrue();
         assertThat(new ClassPathResource("db/migration/V2__user_token_version.sql").exists()).isTrue();
+        assertThat(new ClassPathResource("db/migration/V3__more_constraints.sql").exists()).isTrue();
     }
 }

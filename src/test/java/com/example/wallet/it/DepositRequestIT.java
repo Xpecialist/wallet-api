@@ -283,6 +283,21 @@ class DepositRequestIT extends ItBase {
     // ---- admin list ----
 
     @Test
+    void adminUsernameFilterIgnoresTheDefaultLocaleAndIsBounded() throws Exception {
+        create(alice, "1");
+        java.util.Locale previous = java.util.Locale.getDefault();
+        java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr-TR")); // "I".toLowerCase() would give a dotless i
+        try {
+            assertThat(body(getJson("/api/admin/deposit-requests?username=ALICE", admin)).get("totalElements").asLong())
+                    .isEqualTo(1);
+        } finally {
+            java.util.Locale.setDefault(previous);
+        }
+        assertThat(status(getJson("/api/admin/deposit-requests?username=" + "a".repeat(50), admin))).isEqualTo(200);
+        assertThat(status(getJson("/api/admin/deposit-requests?username=" + "a".repeat(51), admin))).isEqualTo(400);
+    }
+
+    @Test
     void adminListFiltersByStatusAndUserAndPutsPendingFirst() throws Exception {
         long a1 = create(alice, "1");
         long b1 = create(bob, "2");

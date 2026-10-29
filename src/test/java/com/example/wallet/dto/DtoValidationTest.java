@@ -155,4 +155,15 @@ class DtoValidationTest {
         assertThat(v.validate(new ChangePasswordRequest("x".repeat(72), "12345678"))).isEmpty();
         assertThat(fields(new ChangePasswordRequest("x".repeat(73), "12345678"))).containsExactly("currentPassword");
     }
+
+    @Test
+    void loginAndReceiverUsernamesAreLimitedTo50CharactersTheLongestARegisteredNameCanBe() {
+        assertThat(v.validate(new LoginRequest("a".repeat(50), "pw"))).isEmpty();
+        assertThat(fields(new LoginRequest("a".repeat(51), "pw"))).containsExactly("username");
+        assertThat(fields(new LoginRequest("a".repeat(100_000), "pw"))).containsExactly("username");
+        assertThat(v.validate(new TransferRequest("b".repeat(50), null, BigDecimal.ONE, null))).isEmpty();
+        assertThat(fields(new TransferRequest("b".repeat(51), null, BigDecimal.ONE, null)))
+                .containsExactly("receiverUsername");
+        assertThat(v.validate(new TransferRequest(null, 3L, BigDecimal.ONE, null))).as("receiver by id").isEmpty();
+    }
 }

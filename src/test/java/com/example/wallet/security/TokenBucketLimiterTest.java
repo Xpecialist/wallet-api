@@ -118,4 +118,23 @@ class TokenBucketLimiterTest {
         for (Thread t : ts) t.join();
         assertThat(allowed.get()).isEqualTo(50);
     }
+
+    @Test
+    void refundGivesOneTokenBackUpToTheCapacityAndIgnoresUnknownKeys() {
+        TokenBucketLimiter l = limiter(2, Duration.ofMinutes(1), 100);
+        assertThat(l.tryAcquire("a")).isZero();
+        assertThat(l.tryAcquire("a")).isZero();
+        assertThat(l.tryAcquire("a")).isPositive();
+        l.refund("a");
+        assertThat(l.tryAcquire("a")).as("the refunded token").isZero();
+        assertThat(l.tryAcquire("a")).isPositive();
+        l.refund("a");
+        l.refund("a");
+        l.refund("a");
+        assertThat(l.tryAcquire("a")).isZero();
+        assertThat(l.tryAcquire("a")).isZero();
+        assertThat(l.tryAcquire("a")).as("never more than the capacity").isPositive();
+        l.refund("never-seen");
+        assertThat(l.size()).isEqualTo(1);
+    }
 }

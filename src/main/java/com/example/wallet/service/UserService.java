@@ -48,7 +48,8 @@ public class UserService {
     }
 
     /**
-     * Changes the email address of the given user.
+     * Changes the email address of the given user. Only the email column is written (a targeted UPDATE), so a stale
+     * copy of the row can never undo a concurrent admin disable or password change.
      *
      * @param username the username
      * @param req      the new email
@@ -62,36 +63,44 @@ public class UserService {
         if (!email.equalsIgnoreCase(u.getEmail()) && users.existsByEmail(email)) {
             throw new ApiException(HttpStatus.CONFLICT, "Email already registered");
         }
-        u.setEmail(email);
-        return UserResponse.from(users.save(u));
+        users.updateEmail(u.getId(), email);
+        return UserResponse.from(reload(u.getId()));
     }
 
     /**
      * Changes the password of the given user after verifying the current one. The new password is hashed with the
      * application's password encoder. Every token issued so far (on all devices) is revoked by bumping the token
-     * version in the same transaction, and a fresh token for the new version is returned so the caller's own
-     * session survives. The bump's row lock is held until commit, so the version read right after it is exactly
-     * the one this call produced even if a logout runs concurrently.
+     * version, and a fresh token for the new version is returned so the caller's own session survives. The check
+     * "this token is still current and the account enabled", the new hash and the bump are ONE conditional UPDATE, so
+     * a token revoked (logout, another password change) or an account disabled after the request was authenticated
+     * cannot finish the change or obtain a new token, and nothing but the hash and the version is written. The row lock
+     * is held until commit, so the new version is exactly the old one plus one.
      *
-     * @param username the username
-     * @param req      the current and new passwords
+     * @param username     the username
+     * @param tokenVersion the token version of the caller's token (checked by the JWT filter, re-checked here)
+     * @param req          the current and new passwords
      * @return a new token valid for the new token version
-     * @throws ApiException 404 if the user does not exist; 400 if the current password is wrong or the new password
-     *         is the same as the current one
+     * @throws ApiException 404 if the user does not exist; 401 if the token is no longer current or the account was
+     *         disabled; 400 if the current password is wrong or the new password is the same as the current one
      */
     @Transactional
-    public AuthResponse changePassword(String username, ChangePasswordRequest req) {
+    public AuthResponse changePassword(String username, long tokenVersion, ChangePasswordRequest req) {
         User u = find(username);
+        if (u.getTokenVersion() != tokenVersion || !u.isEnabled()) throw tokenNoLongerValid();
         if (!encoder.matches(req.currentPassword(), u.getPasswordHash())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Current password is incorrect");
         }
         if (req.currentPassword().equals(req.newPassword())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "New password must be different from the current password");
         }
-        u.setPasswordHash(encoder.encode(req.newPassword()));
-        users.save(u);
-        users.bumpTokenVersion(u.getId());
-        return new AuthResponse(jwt.generateToken(u.getUsername(), users.findTokenVersion(u.getId())));
+        if (users.changePasswordIfCurrent(u.getId(), tokenVersion, encoder.encode(req.newPassword())) == 0) {
+            throw tokenNoLongerValid();
+        }
+        return new AuthResponse(jwt.generateToken(u.getUsername(), tokenVersion + 1));
+    }
+
+    private static ApiException tokenNoLongerValid() {
+        return new ApiException(HttpStatus.UNAUTHORIZED, "Session is no longer valid");
     }
 
     /**
@@ -109,8 +118,9 @@ public class UserService {
     }
 
     /**
-     * Enables or disables a user. A disabled user cannot log in and their existing tokens are rejected. Disabling
-     * also bumps the token version, so the user needs a fresh login (new token) after being re-enabled.
+     * Enables or disables a user (a targeted UPDATE of the enabled flag only). A disabled user cannot log in and their
+     * existing tokens are rejected. Disabling also bumps the token version in the same statement, so the user needs a
+     * fresh login (new token) after being re-enabled.
      *
      * @param id         the id of the user to change
      * @param enabled    the new status
@@ -120,14 +130,18 @@ public class UserService {
      */
     @Transactional
     public UserResponse setEnabled(Long id, boolean enabled, String callerName) {
-        User u = users.findById(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "User not found"));
+        User u = reload(id);
         if (!enabled && u.getUsername().equals(callerName)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "You cannot disable your own account");
         }
-        u.setEnabled(enabled);
-        UserResponse saved = UserResponse.from(users.save(u));
-        if (!enabled) users.bumpTokenVersion(u.getId());
-        return saved;
+        if (enabled) users.enable(id);
+        else users.disableAndRevoke(id);
+        return UserResponse.from(reload(id));
+    }
+
+    /** Re-reads a user after a targeted UPDATE (which clears the persistence context). */
+    private User reload(Long id) {
+        return users.findById(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "User not found"));
     }
 
     /**

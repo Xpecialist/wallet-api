@@ -1,5 +1,11 @@
 # Rate limiting (finding M1), 2026-10-23
 
+> **Round 3 update (2026-10-29), read this first.** Four statements below are superseded; details in `SECURITY_FIXES_ROUND3_LOG.md`:
+> 1. "Requests outside `/api/` are never limited" / the `startsWith("/api/")` gate: it tested the RAW URI, so `/%61pi/auth/login` skipped every limit. There is no path gate any more; endpoints are matched on the decoded path and every request counts in the global per-IP bucket.
+> 2. The login body "over 8192 bytes gets no per-username bucket": such bodies are now refused with 413 (non-UTF-8 charsets 415; duplicate keys, trailing content, non-string or blank usernames 400).
+> 3. The per-username bucket `login-username` (every attempt, shared by all IPs) is replaced by `login-username-ip` (5/min per username and IP, every attempt) and `login-username-failures` (30/min per username across IPs, FAILED attempts only, never applied to an address that logged in as that user within 7 days).
+> 4. "slowed to about one attempt per 12 seconds, never a lockout" was wrong (see the corrected item under Remaining risks).
+
 Branch `Testing`, nothing committed. Fixes M1 of `TEST_FINDINGS.md` (no brute-force protection; ~12 wrong logins/s sequential and ~100/s parallel against one account, unlimited registrations, per `SECURITY_TEST_REPORT.md`).
 
 ## Design and why
@@ -17,7 +23,7 @@ In-memory token buckets, applied by two servlet filters inside the Spring Securi
 
 **Login username.** The login body is JSON, so the filter reads it (only for `application/json` or `+json` content types, at most 8192 bytes; a valid login body is far smaller since username max 50 and password max 72) with the application's own `JsonMapper` bean, so the filter and the controller parse identically. The bytes are replayed to the controller through a request wrapper (also for oversized bodies, whose remainder is passed on untouched). The username is trimmed (as `AuthService.login` does) and lower-cased with `Locale.ROOT`; names longer than 50 characters (which cannot exist) share a single key so an attacker cannot make each request occupy a new map entry. A body that is not JSON, not an object, or has a non-string username gets no per-username bucket: it fails validation (400/415) before any password is checked. The per-IP bucket still counts it.
 
-**Every attempt counts** (successful logins too). Counting only failures would need the result of the controller, would make the filter stateful across the response, and a success carries no information for an attacker anyway; with 5 per minute a real user is not affected. Windows are short and refill continuously: no permanent lockout.
+**Every attempt counts** (successful logins too). Counting only failures would need the result of the controller, would make the filter stateful across the response, and a success carries no information for an attacker anyway; with 5 per minute a real user is not affected. Windows are short and refill continuously: no permanent lockout. (SUPERSEDED in round 3 for the per-username bucket: it is now per (username, IP) for every attempt, plus a separate per-username bucket that counts only failed attempts and spares addresses the user has logged in from. The shared "every attempt" per-username bucket let one address deny a user's login indefinitely.)
 
 **No existence leak.** The per-username bucket is applied to any username string the same way; unknown and known names produce identical status, body and Retry-After (tested by comparing both sequences).
 
@@ -86,7 +92,7 @@ Surprises: with 5 more cached Spring contexts the test run hit PostgreSQL "too m
 
 - Single instance only; restart resets counters; N instances multiply the limits.
 - Shared IPs (NAT, offices, carrier-grade NAT) share the per-IP buckets: legitimate users there can be blocked together (login 5/min per IP is the tightest; raise it by property if needed). Behind a proxy without `trust-forwarded-headers` everyone shares ONE bucket (the proxy's address); configure it.
-- Per-username throttle can be used as a nuisance: an attacker who keeps sending attempts for a victim's name keeps that account's login at about one attempt per 12 seconds (never a lockout, the password remains safe). Accepted trade-off of counting every attempt; a wrong-password-only count or a CAPTCHA would be the next step.
+- **CORRECTED (round 3).** This item originally said the shared per-username bucket only slows an attacked account to "about one attempt per 12 seconds (never a lockout)". That was wrong: an attacker who keeps pace (about 6 requests a minute from ONE address) took every refilled token, so the real user, from any address, was answered 429 for as long as the attacker kept going, i.e. a denial of login for a chosen account (found in `SECOND_CODE_REVIEW.md` M-3 and `SECURITY_TEST_REPORT_2.md` R3). The design was replaced in round 3 (see the top of this file and `SECURITY_FIXES_ROUND3_LOG.md`).
 - Distributed attacks: one guess per IP across many IPs is stopped only by the per-username bucket (5/min per account); credential stuffing across many different accounts from many IPs is not stopped, only the global per-IP cap applies.
 - `trust-forwarded-headers=true` without a real proxy in front lets clients forge their address.
 - The 429 path costs one login-body read (8 KB max) before authentication; the Tomcat max POST/header limits still apply.

@@ -20,6 +20,7 @@ import jakarta.persistence.criteria.Predicate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Pageable;
@@ -158,13 +159,16 @@ public class DepositRequestService {
      * @param username optional requesting username (exact, ignoring case)
      * @param pageable page number, size and sort
      * @return one page of requests
-     * @throws ApiException 400 if a sort property is not allowed
+     * @throws ApiException 400 if a sort property is not allowed or the username filter is over 50 characters
      */
     @Transactional(readOnly = true)
     public PageResponse<AdminDepositRequestResponse> listAll(DepositRequestStatus status, Long userId,
                                                               String username, Pageable pageable) {
         SortWhitelist.check(pageable, SortWhitelist.DEPOSIT_REQUESTS);
         RequestLimits.checkPage(pageable);
+        if (username != null && username.length() > 50) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "username: size must be at most 50");
+        }
         boolean pendingFirst = status == null && pageable.getSort().isUnsorted();
         return PageResponse.from(requests.findAll(spec(null, status, userId, username, pendingFirst), pageable)
                 .map(AdminDepositRequestResponse::from));
@@ -296,7 +300,7 @@ public class DepositRequestService {
             if (status != null) p.add(cb.equal(root.get("status"), status));
             if (userId != null) p.add(cb.equal(root.get("user").get("id"), userId));
             if (username != null && !username.isBlank()) {
-                p.add(cb.equal(cb.lower(root.get("user").get("username")), username.trim().toLowerCase()));
+                p.add(cb.equal(cb.lower(root.get("user").get("username")), username.trim().toLowerCase(Locale.ROOT)));
             }
             if (pendingFirst && query.getResultType() != Long.class && query.getResultType() != long.class) {
                 query.orderBy(

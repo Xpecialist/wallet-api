@@ -3,6 +3,7 @@ package com.example.wallet.security;
 import com.example.wallet.repository.UserRepository;
 import jakarta.servlet.DispatcherType;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -46,7 +47,8 @@ public class SecurityConfig {
      *   <li>Everything else requires authentication.</li>
      *   <li>Unauthenticated access to a protected endpoint returns 401 with no body. An authenticated user
      *       lacking the required role gets the default 403.</li>
-     *   <li>Rate limiting ({@link RateLimitFilter}) runs first in the chain, before any token parsing or BCrypt work;
+     *   <li>Rate limiting ({@link RateLimitFilter}) runs first in the chain, before any token parsing or BCrypt work, then
+     *       the request body cap ({@link BodyLimitFilter}, 413);
      *       the per-user limits ({@link UserRateLimitFilter}) run right after {@link JwtAuthFilter}. Both are plain
      *       objects, not beans, so Boot does not also register them as servlet filters.</li>
      * </ul>
@@ -54,13 +56,15 @@ public class SecurityConfig {
      * @param http          the HTTP security builder
      * @param jwtAuthFilter the JWT filter, registered before the username/password filter
      * @param rateLimits    the rate limiter state; absent only in web-layer test slices that do not load it
-     * @param mapper        reads login bodies for the per-username limit
+     * @param mapper        reads login bodies for the per-username limit and writes filter error bodies
+     * @param maxBodyBytes  largest request body accepted under {@code /api} ({@code app.max-body-bytes})
      * @return the configured filter chain
      * @throws Exception if the configuration cannot be built
      */
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http, JwtAuthFilter jwtAuthFilter,
-                                           ObjectProvider<RateLimits> rateLimits, JsonMapper mapper)
+                                           ObjectProvider<RateLimits> rateLimits, JsonMapper mapper,
+                                           @Value("${app.max-body-bytes:65536}") long maxBodyBytes)
             throws Exception {
         http
             .csrf(AbstractHttpConfigurer::disable)
@@ -75,10 +79,10 @@ public class SecurityConfig {
             .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
         RateLimits limits = rateLimits.getIfAvailable();
-        if (limits != null) {
-            http.addFilterBefore(new RateLimitFilter(limits, mapper), JwtAuthFilter.class)
-                .addFilterAfter(new UserRateLimitFilter(limits), JwtAuthFilter.class);
-        }
+        // Same anchor, so the order is the order of these calls: rate limits, then the body cap, then the JWT filter
+        if (limits != null) http.addFilterBefore(new RateLimitFilter(limits, mapper), JwtAuthFilter.class);
+        http.addFilterBefore(new BodyLimitFilter(maxBodyBytes, mapper), JwtAuthFilter.class);
+        if (limits != null) http.addFilterAfter(new UserRateLimitFilter(limits), JwtAuthFilter.class);
         return http.build();
     }
 

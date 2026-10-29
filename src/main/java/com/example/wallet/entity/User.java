@@ -3,7 +3,11 @@ package com.example.wallet.entity;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
-/** A registered user, stored in the {@code users} table. Each user owns exactly one {@link Wallet}. */
+/**
+ * A registered user, stored in the {@code users} table. Each user owns exactly one {@link Wallet}. The mutable columns
+ * (email, password hash, enabled, token version) are never written by an entity update: each is changed only by its own
+ * targeted UPDATE in {@code UserRepository}, so a stale copy of the row cannot overwrite a concurrent change.
+ */
 @Entity
 @Table(name = "users")
 public class User {
@@ -14,17 +18,20 @@ public class User {
     @Column(nullable = false, unique = true, length = 50)
     private String username;
 
-    @Column(nullable = false, unique = true)
+    /** Never written by an entity update (see {@link #tokenVersion}); only {@code UserRepository.updateEmail} changes it. */
+    @Column(nullable = false, unique = true, updatable = false)
     private String email;
 
-    @Column(name = "password_hash", nullable = false)
+    /** Never written by an entity update; only the targeted UPDATE in {@code UserRepository.changePasswordIfCurrent}. */
+    @Column(name = "password_hash", nullable = false, updatable = false)
     private String passwordHash;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private Role role = Role.USER;
 
-    @Column(nullable = false)
+    /** Never written by an entity update; only the targeted UPDATEs in {@code UserRepository} (disable also revokes tokens). */
+    @Column(nullable = false, updatable = false)
     private boolean enabled = true;
 
     /**

@@ -8,7 +8,7 @@ import org.springframework.test.context.TestPropertySource;
 /** The master switch: with {@code app.rate-limit.enabled=false} nothing is limited, however small the limits are. */
 @TestPropertySource(properties = {
         "app.rate-limit.enabled=false",
-        "app.rate-limit.login-ip.capacity=1", "app.rate-limit.login-username.capacity=1",
+        "app.rate-limit.login-ip.capacity=1", "app.rate-limit.login-username-ip.capacity=1",
         "app.rate-limit.register-ip.capacity=1", "app.rate-limit.global-ip.capacity=1"})
 class RateLimitDisabledIT extends RateLimitBase {
 

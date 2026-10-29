@@ -98,6 +98,17 @@ public final class TokenBucketLimiter {
         return Math.max(1, (nanosToWait + 999_999_999L) / 1_000_000_000L);
     }
 
+    /**
+     * Gives one token back to {@code key} (capped at the capacity); does nothing for a key that is not tracked (it is
+     * already full). Used to undo a reservation that turned out not to be a failed guess.
+     *
+     * @param key the bucket key
+     */
+    public synchronized void refund(String key) {
+        Bucket b = buckets.get(key);
+        if (b != null) b.level = Math.min(maxLevel, b.level + windowNanos);
+    }
+
     /** @return the number of keys currently tracked */
     public synchronized int size() {
         return buckets.size();

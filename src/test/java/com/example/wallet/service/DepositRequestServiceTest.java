@@ -172,6 +172,15 @@ class DepositRequestServiceTest {
         assertThatThrownBy(() -> service.listAll(null, null, null, bad)).satisfies(t -> assertStatus(t, HttpStatus.BAD_REQUEST));
     }
 
+    @Test
+    void adminUsernameFilterIsBoundedTo50Characters() {
+        var page = PageRequest.of(0, 20);
+        assertThatThrownBy(() -> service.listAll(null, null, "a".repeat(51), page))
+                .satisfies(t -> assertStatus(t, HttpStatus.BAD_REQUEST));
+        assertThatThrownBy(() -> service.listAll(null, null, " ".repeat(10_000), page))
+                .satisfies(t -> assertStatus(t, HttpStatus.BAD_REQUEST));
+    }
+
     // ---- approve ----
 
     @Test

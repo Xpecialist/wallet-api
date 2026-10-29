@@ -1,6 +1,7 @@
 package com.example.wallet.controller;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -350,7 +351,7 @@ class ApiWebLayerTest {
         var resp = new UserResponse(1L, "alice", "new@b.co", "USER", true, null);
         when(userService.getProfile("alice")).thenReturn(resp);
         when(userService.updateEmail(eq("alice"), any())).thenReturn(resp);
-        when(userService.changePassword(eq("alice"), any())).thenReturn(new AuthResponse("fresh"));
+        when(userService.changePassword(eq("alice"), eq(0L), any())).thenReturn(new AuthResponse("fresh"));
 
         mvc.perform(get("/api/users/me").header("Authorization", h))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.username").value("alice"));
@@ -361,7 +362,7 @@ class ApiWebLayerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"currentPassword\":\"old\",\"newPassword\":\"newpassword\"}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.token").value("fresh"));
-        verify(userService).changePassword(eq("alice"), any());
+        verify(userService).changePassword(eq("alice"), eq(0L), any());
     }
 
     @Test
@@ -372,7 +373,7 @@ class ApiWebLayerTest {
         mvc.perform(post("/api/users/me/password").header("Authorization", h)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"currentPassword\":\"old\",\"newPassword\":\"short\"}")).andExpect(status().isBadRequest());
-        verify(userService, never()).changePassword(any(), any());
+        verify(userService, never()).changePassword(any(), anyLong(), any());
     }
 
     @Test
@@ -411,6 +412,6 @@ class ApiWebLayerTest {
                         .content("{\"currentPassword\":\"old\",\"newPassword\":\"" + tooLong + "\"}"))
                 .andExpect(status().isBadRequest());
         verifyNoInteractions(authService);
-        verify(userService, never()).changePassword(any(), any());
+        verify(userService, never()).changePassword(any(), anyLong(), any());
     }
 }

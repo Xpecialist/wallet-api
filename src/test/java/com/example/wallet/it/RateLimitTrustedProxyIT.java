@@ -10,7 +10,7 @@ import org.springframework.test.context.TestPropertySource;
         "app.rate-limit.enabled=true", "app.rate-limit.trust-forwarded-headers=true",
         "app.rate-limit.trusted-proxies=1",
         "app.rate-limit.login-ip.capacity=3", "app.rate-limit.login-ip.window=1m",
-        "app.rate-limit.login-username.capacity=100", "app.rate-limit.global-ip.capacity=1000"})
+        "app.rate-limit.login-username-ip.capacity=100", "app.rate-limit.global-ip.capacity=1000"})
 class RateLimitTrustedProxyIT extends RateLimitBase {
     private static final String PROXY = "10.40.0.1";
 

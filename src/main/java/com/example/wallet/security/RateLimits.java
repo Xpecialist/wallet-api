@@ -3,17 +3,12 @@ package com.example.wallet.security;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -33,7 +28,9 @@ public class RateLimits {
     private final JsonMapper mapper;
     final TokenBucketLimiter globalIp;
     final TokenBucketLimiter loginIp;
-    final TokenBucketLimiter loginUsername;
+    final TokenBucketLimiter loginUsernameIp;
+    final TokenBucketLimiter loginUsernameFailures;
+    final KnownLogins knownLogins;
     final TokenBucketLimiter registerIp;
     final TokenBucketLimiter passwordUser;
     final TokenBucketLimiter passwordIp;
@@ -54,7 +51,9 @@ public class RateLimits {
         this.mapper = mapper;
         this.globalIp = limiter(p.getGlobalIp(), p);
         this.loginIp = limiter(p.getLoginIp(), p);
-        this.loginUsername = limiter(p.getLoginUsername(), p);
+        this.loginUsernameIp = limiter(p.getLoginUsernameIp(), p);
+        this.loginUsernameFailures = limiter(p.getLoginUsernameFailures(), p);
+        this.knownLogins = new KnownLogins(p.getKnownLoginTtl(), p.getKnownLoginMax());
         this.registerIp = limiter(p.getRegisterIp(), p);
         this.passwordUser = limiter(p.getPasswordUser(), p);
         this.passwordIp = limiter(p.getPasswordIp(), p);
@@ -71,8 +70,9 @@ public class RateLimits {
 
     /** Forgets every counter (test helper). */
     public void clear() {
-        for (TokenBucketLimiter l : List.of(globalIp, loginIp, loginUsername, registerIp, passwordUser, passwordIp,
-                moneyUser, adminUser)) {
+        knownLogins.clear();
+        for (TokenBucketLimiter l : List.of(globalIp, loginIp, loginUsernameIp, loginUsernameFailures, registerIp,
+                passwordUser, passwordIp, moneyUser, adminUser)) {
             l.clear();
         }
     }
@@ -125,14 +125,19 @@ public class RateLimits {
     void reject(HttpServletResponse response, long retryAfterSeconds) throws IOException {
         String message = "Too many requests, try again in " + retryAfterSeconds
                 + (retryAfterSeconds == 1 ? " second" : " seconds");
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("timestamp", Instant.now().toString());
-        body.put("status", HttpStatus.TOO_MANY_REQUESTS.value());
-        body.put("error", message);
-        response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
         response.setHeader("Retry-After", String.valueOf(retryAfterSeconds));
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        response.getWriter().write(mapper.writeValueAsString(body));
+        error(response, HttpStatus.TOO_MANY_REQUESTS, message);
+    }
+
+    /**
+     * Writes any other error the filters produce (413, 415, 400) in the same JSON shape.
+     *
+     * @param response the response
+     * @param status   the HTTP status
+     * @param message  the generic message
+     * @throws IOException if writing fails
+     */
+    void error(HttpServletResponse response, HttpStatus status, String message) throws IOException {
+        ApiErrors.write(response, mapper, status, message);
     }
 }

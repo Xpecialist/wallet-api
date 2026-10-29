@@ -15,7 +15,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
  * Rate limits keyed by the authenticated user; it runs right after {@link JwtAuthFilter}. A request without a valid
- * authentication passes through untouched (the security rules answer 401 for it, which is cheap). Applies:
+ * authentication passes through untouched (the security rules answer 401 for it, which is cheap). The endpoints are
+ * recognised by matchers on the decoded path (like Spring MVC), never by a prefix of the raw URI. Applies:
  * <ul>
  *   <li>{@code POST /api/users/me/password}: per user and per client IP;</li>
  *   <li>money-moving endpoints (transfer, withdraw, deposit request): per user;</li>
@@ -43,7 +44,7 @@ public class UserRateLimitFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !limits.enabled() || !request.getRequestURI().startsWith("/api/");
+        return !limits.enabled();
     }
 
     @Override

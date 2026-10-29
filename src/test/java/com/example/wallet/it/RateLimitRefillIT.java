@@ -10,7 +10,7 @@ import org.springframework.test.web.servlet.MvcResult;
 @TestPropertySource(properties = {
         "app.rate-limit.enabled=true",
         "app.rate-limit.login-ip.capacity=2", "app.rate-limit.login-ip.window=2s",
-        "app.rate-limit.login-username.capacity=2", "app.rate-limit.login-username.window=2s",
+        "app.rate-limit.login-username-ip.capacity=2", "app.rate-limit.login-username-ip.window=2s",
         "app.rate-limit.global-ip.capacity=6", "app.rate-limit.global-ip.window=1m"})
 class RateLimitRefillIT extends RateLimitBase {
 

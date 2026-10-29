@@ -4,20 +4,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MvcResult;
 import tools.jackson.databind.JsonNode;
 
 /**
- * Rate limiting end to end through the real filter chain on real SQL. Small limits of their own: login 5/min per IP
- * and per username, register 3/h, password change 3/15 min per user and 4 per IP, money 4/min, admin 4/min.
+ * Rate limiting end to end through the real filter chain on real SQL. Small limits of their own: login 5/min per IP,
+ * 3/min per username and IP, 8 failed guesses/min per username across IPs, register 3/h, password change 3/15 min
+ * per user and 4 per IP, money 4/min, admin 4/min.
  * Requests come from chosen client addresses (the servlet remote address).
  */
 @TestPropertySource(properties = {
         "app.rate-limit.enabled=true",
         "app.rate-limit.login-ip.capacity=5", "app.rate-limit.login-ip.window=1m",
-        "app.rate-limit.login-username.capacity=5", "app.rate-limit.login-username.window=1m",
+        "app.rate-limit.login-username-ip.capacity=3", "app.rate-limit.login-username-ip.window=1m",
+        "app.rate-limit.login-username-failures.capacity=8", "app.rate-limit.login-username-failures.window=1m",
         "app.rate-limit.register-ip.capacity=3", "app.rate-limit.register-ip.window=1h",
         "app.rate-limit.password-user.capacity=3", "app.rate-limit.password-user.window=15m",
         "app.rate-limit.password-ip.capacity=4", "app.rate-limit.password-ip.window=15m",
@@ -58,31 +61,101 @@ class RateLimitIT extends RateLimitBase {
         assertThat(b.get("error").asString()).contains(r.getResponse().getHeader("Retry-After"));
     }
 
-    // ---- login: per username ---------------------------------------------------------------------------------
+    // ---- login: per username and IP, and the per-username aggregate -----------------------------------------------
 
     @Test
-    void guessesSpreadAcrossManyIpsAreStillStoppedByTheUsernameBucket() throws Exception {
+    void anAttackerExhaustingItsOwnBucketDoesNotBlockTheVictimOnAnotherIp() throws Exception {
         register("alice");
-        register("bob");
         limits.clear();
-        for (int i = 1; i <= 5; i++) {
-            assertThat(status(loginFrom("10.2.2." + i, "alice", WRONG))).isEqualTo(401);
+        for (int i = 0; i < 3; i++) assertThat(status(loginFrom("10.2.1.1", "alice", WRONG))).isEqualTo(401);
+        assertThat(status(loginFrom("10.2.1.1", "alice", WRONG))).as("the attacker's own bucket for alice").isEqualTo(429);
+        assertThat(status(loginFrom("10.2.1.1", "alice", PASSWORD))).as("and that IP stays held").isEqualTo(429);
+        for (int round = 0; round < 3; round++) {
+            assertThat(status(loginFrom("10.2.1.1", "alice", WRONG))).isEqualTo(429);
+            assertThat(status(loginFrom("10.2.9.9", "alice", PASSWORD))).as("the victim on her own IP").isEqualTo(200);
         }
-        assertThat(status(loginFrom("10.2.2.6", "alice", WRONG))).isEqualTo(429);
-        assertThat(status(loginFrom("10.2.2.7", "alice", PASSWORD))).as("right password is held too").isEqualTo(429);
-        assertThat(status(loginFrom("10.2.2.6", "bob", PASSWORD))).as("another account, same IP").isEqualTo(200);
     }
 
     @Test
-    void caseAndWhitespaceVariantsShareOneUsernameBucket() throws Exception {
+    void guessesSpreadOverFewIpsAreStoppedPerIpAndMoreIpsOnlyBuyUpToTheAggregateThreshold() throws Exception {
         register("alice");
         limits.clear();
-        String[] variants = {"alice", "ALICE", "Alice", " alice ", "aLiCe"};
-        for (int i = 0; i < variants.length; i++) {
-            assertThat(status(loginFrom("10.3.3." + i, variants[i], WRONG))).isEqualTo(401);
+        // 8 failures are allowed across all IPs in a minute (test setting), however they are spread
+        for (int i = 1; i <= 8; i++) {
+            assertThat(status(loginFrom("10.2.2." + i, "alice", WRONG))).isEqualTo(401);
         }
-        assertThat(status(loginFrom("10.3.3.9", "alice  ", WRONG))).isEqualTo(429);
-        assertThat(status(loginFrom("10.3.3.9", "\tALICE", WRONG))).isEqualTo(429);
+        MvcResult blocked = loginFrom("10.2.2.9", "alice", WRONG);
+        assertThat(status(blocked)).isEqualTo(429);
+        assertThat(Long.parseLong(blocked.getResponse().getHeader("Retry-After"))).isBetween(1L, 8L);
+        assertThat(status(loginFrom("10.2.2.10", "alice", PASSWORD))).as("a new IP, even the right password").isEqualTo(429);
+        register("bob");
+        assertThat(status(loginFrom("10.2.2.9", "bob", PASSWORD))).as("another account, same IP").isEqualTo(200);
+    }
+
+    @Test
+    void aDistributedAttackBlocksNewIpsButNotAnIpThatLoggedInAsThatUserBefore() throws Exception {
+        register("alice");
+        register("bob");
+        limits.clear();
+        assertThat(status(loginFrom("10.2.3.1", "alice", PASSWORD))).as("alice's own IP, now known").isEqualTo(200);
+        assertThat(status(loginFrom("10.2.3.2", "bob", PASSWORD))).as("bob's own IP, known for bob only").isEqualTo(200);
+        for (int ip = 1; ip <= 4; ip++) {
+            for (int k = 0; k < 2; k++) assertThat(status(loginFrom("10.2.4." + ip, "alice", WRONG))).isEqualTo(401);
+        }
+        assertThat(status(loginFrom("10.2.4.5", "alice", WRONG))).as("new attacker IP").isEqualTo(429);
+        assertThat(status(loginFrom("10.2.4.6", "alice", PASSWORD))).as("new IP, even the real password").isEqualTo(429);
+        assertThat(status(loginFrom("10.2.3.2", "alice", PASSWORD))).as("an IP known for bob is not known for alice")
+                .isEqualTo(429);
+
+        assertThat(status(loginFrom("10.2.3.1", "alice", PASSWORD))).as("alice from her known IP").isEqualTo(200);
+        assertThat(status(loginFrom("10.2.3.1", "alice", WRONG))).as("a typo from the known IP is just a 401").isEqualTo(401);
+        assertThat(status(loginFrom("10.2.4.7", "bob", PASSWORD))).as("bob is not affected").isEqualTo(200);
+    }
+
+    @Test
+    void successfulLoginsAndRequestsThatFailValidationDoNotUseUpTheAggregate() throws Exception {
+        register("alice");
+        limits.clear();
+        for (int i = 1; i <= 12; i++) assertThat(status(loginFrom("10.2.5." + i, "alice", PASSWORD))).isEqualTo(200);
+        for (int i = 20; i <= 30; i++) assertThat(status(loginFrom("10.2.5." + i, "alice", ""))).isEqualTo(400);
+        for (int i = 40; i <= 47; i++) assertThat(status(loginFrom("10.2.5." + i, "alice", WRONG))).isEqualTo(401);
+        assertThat(status(loginFrom("10.2.5.50", "alice", WRONG))).as("only the 8 failures counted").isEqualTo(429);
+    }
+
+    @Test
+    void aNewIpIsHeldBackOnlyWhileFailuresKeepArrivingAndIsAdmittedAfterTheyStop() throws Exception {
+        register("alice");
+        limits.clear();
+        for (int i = 1; i <= 8; i++) loginFrom("10.2.6." + i, "alice", WRONG);
+        MvcResult held = loginFrom("10.2.6.20", "alice", PASSWORD);
+        assertThat(status(held)).isEqualTo(429);
+        Thread.sleep(Long.parseLong(held.getResponse().getHeader("Retry-After")) * 1000 + 200);
+        assertThat(status(loginFrom("10.2.6.20", "alice", PASSWORD))).as("one token has refilled").isEqualTo(200);
+    }
+
+    @Test
+    void parallelWrongGuessesFromManyIpsNeverExceedTheAggregateThreshold() throws Exception {
+        register("alice");
+        limits.clear();
+        List<Callable<MvcResult>> tasks = new ArrayList<>();
+        for (int i = 1; i <= 24; i++) {
+            String ip = "10.2.7." + i;
+            tasks.add(() -> loginFrom(ip, "alice", WRONG));
+        }
+        List<Integer> statuses = statusesOf(runParallelResults(tasks));
+        assertThat(statuses.stream().filter(s -> s == 401).count()).as(statuses.toString()).isEqualTo(8);
+        assertThat(statuses.stream().filter(s -> s == 429).count()).isEqualTo(16);
+    }
+
+    @Test
+    void caseAndWhitespaceVariantsShareOneUsernameAndIpBucket() throws Exception {
+        register("alice");
+        limits.clear();
+        String[] variants = {"alice", "ALICE", " Alice "};
+        for (String v : variants) assertThat(status(loginFrom("10.3.3.1", v, WRONG))).as(v).isEqualTo(401);
+        assertThat(status(loginFrom("10.3.3.1", "alice  ", WRONG))).isEqualTo(429);
+        assertThat(status(loginFrom("10.3.3.1", "\tALICE", WRONG))).isEqualTo(429);
+        assertThat(status(loginFrom("10.3.3.2", "aLiCe", WRONG))).as("another IP has its own bucket").isEqualTo(401);
     }
 
     @Test
@@ -93,18 +166,31 @@ class RateLimitIT extends RateLimitBase {
         limits.clear();
         List<String> unknown = attempts("nobody-here", "10.4.2.");
         assertThat(unknown).isEqualTo(known);
-        assertThat(known).hasSize(7);
-        assertThat(known.get(4)).startsWith("401 ");
-        assertThat(known.get(5)).startsWith("429 ").contains("Too many requests, try again in 12 seconds");
+        assertThat(known).hasSize(10);
+        assertThat(known.get(7)).startsWith("401 ");
+        assertThat(known.get(8)).startsWith("429 ").contains("Too many requests, try again in N second");
+
+        // the same per-IP behavior too: three attempts from one IP, then 429, for both
+        limits.clear();
+        List<String> k = new ArrayList<>();
+        List<String> u = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            k.add(status(loginFrom("10.4.3.1", "alice", WRONG)) + "");
+            u.add(status(loginFrom("10.4.3.2", "nobody-here", WRONG)) + "");
+        }
+        assertThat(u).isEqualTo(k).containsExactly("401", "401", "401", "429", "429");
     }
 
-    /** Seven attempts from seven IPs; returns "status error Retry-After" per attempt. */
+    /** Ten attempts from ten IPs; returns "status error Retry-After" per attempt. */
     private List<String> attempts(String username, String ipPrefix) throws Exception {
         List<String> out = new ArrayList<>();
-        for (int i = 1; i <= 7; i++) {
+        for (int i = 1; i <= 10; i++) {
             MvcResult r = loginFrom(ipPrefix + i, username, WRONG);
             JsonNode b = body(r);
-            out.add(status(r) + " " + b.get("error").asString() + " " + r.getResponse().getHeader("Retry-After"));
+            out.add(status(r) + " " + b.get("error").asString().replaceAll("\\d+", "N"));
+            if (status(r) == 429) {
+                assertThat(Long.parseLong(r.getResponse().getHeader("Retry-After"))).isBetween(1L, 60L);
+            }
         }
         return out;
     }

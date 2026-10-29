@@ -38,7 +38,10 @@ public class RateLimitProperties {
     private int trustedProxies = 1;
     private int maxKeys = 50_000;
     private Rule loginIp = new Rule(5, Duration.ofMinutes(1));
-    private Rule loginUsername = new Rule(5, Duration.ofMinutes(1));
+    private Rule loginUsernameIp = new Rule(5, Duration.ofMinutes(1));
+    private Rule loginUsernameFailures = new Rule(30, Duration.ofMinutes(1));
+    private Duration knownLoginTtl = Duration.ofDays(7);
+    private int knownLoginMax = 10_000;
     private Rule registerIp = new Rule(5, Duration.ofHours(1));
     private Rule passwordUser = new Rule(5, Duration.ofMinutes(15));
     private Rule passwordIp = new Rule(5, Duration.ofMinutes(15));
@@ -56,8 +59,14 @@ public class RateLimitProperties {
     public void setMaxKeys(int maxKeys) { this.maxKeys = maxKeys; }
     public Rule getLoginIp() { return loginIp; }
     public void setLoginIp(Rule r) { this.loginIp = r; }
-    public Rule getLoginUsername() { return loginUsername; }
-    public void setLoginUsername(Rule r) { this.loginUsername = r; }
+    public Rule getLoginUsernameIp() { return loginUsernameIp; }
+    public void setLoginUsernameIp(Rule r) { this.loginUsernameIp = r; }
+    public Rule getLoginUsernameFailures() { return loginUsernameFailures; }
+    public void setLoginUsernameFailures(Rule r) { this.loginUsernameFailures = r; }
+    public Duration getKnownLoginTtl() { return knownLoginTtl; }
+    public void setKnownLoginTtl(Duration d) { this.knownLoginTtl = d; }
+    public int getKnownLoginMax() { return knownLoginMax; }
+    public void setKnownLoginMax(int n) { this.knownLoginMax = n; }
     public Rule getRegisterIp() { return registerIp; }
     public void setRegisterIp(Rule r) { this.registerIp = r; }
     public Rule getPasswordUser() { return passwordUser; }

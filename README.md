@@ -99,7 +99,7 @@ Then open `http://localhost:5173`. The dev server proxies `/api` to the backend.
 
 ## Data model
 
-Created by the Flyway migrations `V1__baseline.sql` and `V2__user_token_version.sql` in `src/main/resources/db/migration` (see [Database schema](#database-schema-flyway)).
+Created by the Flyway migrations `V1__baseline.sql`, `V2__user_token_version.sql` and `V3__more_constraints.sql` in `src/main/resources/db/migration` (see [Database schema](#database-schema-flyway)).
 
 **users**: `id`, `username` (unique, also case-insensitively via `uq_users_username_lower`), `email` (unique, also case-insensitively via `uq_users_email_lower`), `password_hash` (BCrypt), `role` (`USER` or `ADMIN`, default `USER`), `enabled` (boolean, default true), `token_version` (BIGINT, default 0; see [Token revocation](#token-revocation)), `created_at`
 
@@ -118,9 +118,9 @@ A check constraint ties the type to the wallets: a transfer has both wallets, a 
 
 ## Database schema (Flyway)
 
-Flyway owns the schema. Migrations live in `src/main/resources/db/migration` and run at startup, each exactly once; applied versions are recorded in the table `flyway_schema_history`. Hibernate only validates the result (`spring.jpa.hibernate.ddl-auto=validate`). `V1__baseline.sql` is the baseline schema (users, wallets, transactions, deposit_requests with all constraints and indexes); `V2__user_token_version.sql` adds `users.token_version`.
+Flyway owns the schema. Migrations live in `src/main/resources/db/migration` and run at startup, each exactly once; applied versions are recorded in the table `flyway_schema_history`. Hibernate only validates the result (`spring.jpa.hibernate.ddl-auto=validate`). `V1__baseline.sql` is the baseline schema (users, wallets, transactions, deposit_requests with all constraints and indexes); `V2__user_token_version.sql` adds `users.token_version`; `V3__more_constraints.sql` adds CHECK constraints (`chk_tx_status`, `chk_users_role`, `chk_wallets_currency` = three capital letters, `chk_tx_no_self_transfer`), so the database itself refuses an unknown status or role, a lower-case currency or a transfer from a wallet to itself. V3 is validated against existing rows: a database that already contains a violating row fails the migration (nothing is changed) and must be fixed first.
 
-**Changing the schema.** Add a new file `V3__short_description.sql` (next number, two underscores, plain SQL) next to V1 and V2 and update the entities. NEVER edit or rename a migration that has been applied anywhere: Flyway validates checksums at startup and refuses to start if an applied file changed. To fix a mistake, add a new migration.
+**Changing the schema.** Add a new file `V4__short_description.sql` (next number, two underscores, plain SQL) next to V1 to V3 and update the entities. NEVER edit or rename a migration that has been applied anywhere: Flyway validates checksums at startup and refuses to start if an applied file changed. To fix a mistake, add a new migration.
 
 **Existing databases.** A database created by the previous code (`schema.sql` at every start) has the V1 shape but no `flyway_schema_history`. With `spring.flyway.baseline-on-migrate=true` and `baseline-version=1`, Flyway records it as "already at version 1" and does not run V1 again; later migrations then apply normally. An EMPTY database is never baselined: it runs V1 in full. Because a baseline skips V1, the database must really be at the current shape. On such a database the app first checks the tables, indexes and constraints that V1 defines (`SchemaShapeGuard`) and refuses to start, listing what is missing, if it is older. Supported paths for an older database: first start the previous version of the app once so its `schema.sql` upgrades it to the current shape, or recreate the database. (The same check also runs after every migration, so a dropped index or constraint stops startup.)
 
@@ -265,7 +265,7 @@ Errors from the application use this shape:
 { "timestamp": "2026-10-16T00:00:00Z", "status": 422, "error": "Insufficient funds" }
 ```
 
-Status codes you will see: 400 (validation, transfer to self, no receiver, currency mismatch, invalid `Idempotency-Key` header (blank or over 100 characters), invalid sort property), 401 (bad credentials or disabled account at login, or missing/invalid token; the missing-token 401 has an empty body), 403 (a non-admin calling an admin endpoint), 404 (missing, or not yours: wallets and transactions of other users look exactly like missing ones), 409 (duplicate username/email, idempotency key reused with a different request), 422 (insufficient funds), 429 (rate limit exceeded, see [Rate limiting](#rate-limiting)).
+Status codes you will see: 400 (validation, transfer to self, no receiver, currency mismatch, invalid `Idempotency-Key` header (blank or over 100 characters), invalid sort property), 401 (bad credentials or disabled account at login, or missing/invalid token; the missing-token 401 has an empty body), 403 (a non-admin calling an admin endpoint), 404 (missing, or not yours: wallets and transactions of other users look exactly like missing ones), 409 (duplicate username/email, idempotency key reused with a different request), 413 (request body over `app.max-body-bytes`), 415 (not JSON), 422 (insufficient funds), 429 (rate limit exceeded, see [Rate limiting](#rate-limiting)).
 
 ### curl walkthrough
 
@@ -329,24 +329,27 @@ The version is increased with one atomic `UPDATE users SET token_version = token
 - the user changes the password: the other sessions die, and the response (200) contains a NEW token for the new version so the current session keeps working; the old token no longer works;
 - an admin DISABLES the user (the existing disabled rejection stays; re-enabling does not bump, but the old tokens stay dead, so the user must log in again).
 
+**No lost updates on `users`.** The `User` entity never writes its email, password hash, enabled flag or token version on an update (`updatable = false`); each is changed by its own targeted `UPDATE` in `UserRepository`, so a stale copy of the row (for example a password change that was loading while an admin disabled the user) can never overwrite another change. Disabling is one statement (`enabled = false` and `token_version + 1`). A password change is one conditional statement: it sets the new hash and bumps the version only `where token_version = <the version of the caller's token> and enabled`, so a token that was revoked (logout, another password change) or an account that was disabled after the request passed authentication gets 401 and no new token, and two parallel changes with one token have exactly one winner.
+
 There is no endpoint that changes a role, so there is nothing to bump there yet; a future role change must call `UserRepository.bumpTokenVersion` too. Login and registration issue tokens with the current version. Tokens issued before this feature have no `tv` claim and are rejected: users simply log in again. Logging out is therefore "log out everywhere"; there is no per-device logout. Tokens are still short-lived (1 hour). Details: `TOKEN_REVOCATION_LOG.md`.
 
 ## Rate limiting
 
-Brute-force and flood protection with in-memory token buckets (no extra dependency; `RateLimitFilter`, `UserRateLimitFilter`, `TokenBucketLimiter`). Each rule is "N requests per window", refilled continuously, so a blocked client is let in again automatically (5 per minute = a burst of 5, then one every 12 seconds). Nothing is locked permanently. Every attempt counts, successful or not.
+Brute-force and flood protection with in-memory token buckets (no extra dependency; `RateLimitFilter`, `UserRateLimitFilter`, `TokenBucketLimiter`, `KnownLogins`). Each rule is "N requests per window", refilled continuously, so a blocked client is let in again automatically (5 per minute = a burst of 5, then one every 12 seconds). Nothing is locked permanently.
 
-| Rule | Applies to | Key | Default |
-|---|---|---|---|
-| `login-ip` | `POST /api/auth/login` | client IP | 5 per 1 minute |
-| `login-username` | `POST /api/auth/login` | target username, trimmed and lower case (unknown names are counted exactly like real ones) | 5 per 1 minute |
-| `register-ip` | `POST /api/auth/register` | client IP | 5 per 1 hour |
-| `password-user` | `POST /api/users/me/password` | authenticated user | 5 per 15 minutes |
-| `password-ip` | `POST /api/users/me/password` | client IP | 5 per 15 minutes |
-| `money-user` | `POST /api/transactions/transfer`, `/api/wallets/me/withdraw`, `/api/deposit-requests` (one shared bucket) | authenticated user | 30 per 1 minute |
-| `admin-user` | admin deposit, approve and reject | authenticated user | 120 per 1 minute |
-| `global-ip` | everything under `/api/**` | client IP | 300 per 1 minute |
+| Rule | Applies to | Key | Counts | Default |
+|---|---|---|---|---|
+| `global-ip` | every request | client IP | every request | 300 per 1 minute |
+| `login-ip` | `POST /api/auth/login` | client IP | every attempt | 5 per 1 minute |
+| `login-username-ip` | `POST /api/auth/login` | target username (trimmed, lower case) AND client IP | every attempt | 5 per 1 minute |
+| `login-username-failures` | `POST /api/auth/login` | target username, all IPs together | FAILED attempts (401) only, and only from addresses not known for that user (see below) | 30 per 1 minute |
+| `register-ip` | `POST /api/auth/register` | client IP | every attempt | 5 per 1 hour |
+| `password-user` | `POST /api/users/me/password` | authenticated user | every attempt | 5 per 15 minutes |
+| `password-ip` | `POST /api/users/me/password` | client IP | every attempt | 5 per 15 minutes |
+| `money-user` | `POST /api/transactions/transfer`, `/api/wallets/me/withdraw`, `/api/deposit-requests` (one shared bucket) | authenticated user | every attempt | 30 per 1 minute |
+| `admin-user` | admin deposit, approve and reject | authenticated user | every attempt | 120 per 1 minute |
 
-Properties (all under `app.rate-limit.`): `enabled` (master switch, default `true`), `<rule>.capacity` and `<rule>.window` for each rule above (for example `login-ip.capacity=5`, `login-ip.window=1m`; durations like `30s`, `15m`, `1h`), `max-keys` (default 50000), `trust-forwarded-headers` (default `false`) and `trusted-proxies` (default 1). The defaults are in `application.properties`.
+Properties (all under `app.rate-limit.`): `enabled` (master switch, default `true`), `<rule>.capacity` and `<rule>.window` for each rule above (for example `login-ip.capacity=5`, `login-ip.window=1m`; durations like `30s`, `15m`, `1h`), `known-login-ttl` (default `7d`), `known-login-max` (default 10000), `max-keys` (default 50000), `trust-forwarded-headers` (default `false`) and `trusted-proxies` (default 1). The defaults are in `application.properties`. (The old `login-username.*` properties were replaced by `login-username-ip.*` and `login-username-failures.*`; unknown property names are ignored by Spring, so remove old ones from your configuration.)
 
 When a limit is exceeded the API answers **429** with a `Retry-After` header (whole seconds) and the usual error body:
 
@@ -356,11 +359,18 @@ Retry-After: 12
 {"timestamp":"...","status":429,"error":"Too many requests, try again in 12 seconds"}
 ```
 
-The login and registration limits run first in the security chain, before token parsing or any BCrypt work, so a rejected request is cheap; the per-user limits run right after the JWT filter. A 429 never reveals whether a username exists: the per-username bucket is applied to unknown names in the same way. The frontend shows "Too many attempts. Try again in N seconds." on every form.
+The limits run first in the security chain, before token parsing or any BCrypt work, so a rejected request is cheap; the per-user limits run right after the JWT filter. Which endpoint a request is for is decided on the DECODED path, exactly as Spring MVC and the authorization rules see it (`/%61pi/auth/login` is the login endpoint), never by a prefix of the raw URL; every request, whatever its path, counts in the global per-IP bucket. A 429 never reveals whether a username exists: unknown names are limited in exactly the same way. The frontend shows "Too many attempts. Try again in N seconds." on every form.
+
+**Login limits and what they do (and do not) protect.**
+- `login-ip` and `login-username-ip` bound one address: 5 login attempts a minute per address, and 5 per account per address.
+- `login-username-failures` bounds guessing spread over MANY addresses: at most 30 failed guesses a minute (a burst of 30, then one every 2 seconds) per account, summed over all addresses. Only failures count (a success or a request that fails validation gives its token back). An address that logged in successfully as that user within `known-login-ttl` (7 days; a small bounded memory of (username, address) pairs, `known-login-max`) is never held back by this limit, so a user logging in from their usual address keeps working while someone elsewhere guesses at their account. An attacker's own address cannot starve the user: the attacker's attempts only use the attacker's own per-address buckets.
+- Honest limits of that design. (1) Guesses per account are not smaller than before: an attacker with enough addresses can make up to 30 failed guesses a minute against one account (about 43,000 a day), plus 5 a minute for each address the user is known from that the attacker shares (NAT); the previous design allowed 5 a minute but let one address lock the account out. Strong passwords (8+ characters, BCrypt) are what protects against that rate. (2) While such an attack is running at full rate, a login from a NEW address (new phone, new network, the first login after 7 days away, or after a restart, which forgets the memory) is answered 429 with a `Retry-After` of a few seconds, until the attack slows below one failure every 2 seconds. This is the cost of not letting an anonymous party lock the real user out; the user's known addresses are not affected. (3) Addresses behind one shared NAT with the user count as the same address. (4) The memory is per instance and in RAM like all counters.
+
+**Request bodies.** Bodies under `/api/**` are capped at `app.max-body-bytes` (default 65536): a larger one gets **413** in the usual JSON error shape before authentication or parsing (a declared `Content-Length` over the cap is refused without reading; a chunked body is read at most one byte past the cap). The login body is additionally limited to 8192 bytes, must be `application/json` (or `+json`) in UTF-8 (otherwise 415), and must be one JSON object without duplicate keys whose `username` is a non-blank string (otherwise 400): the rate limiter reads the username from the body, so it must see exactly what the controller will, and anything ambiguous is refused before any password is checked. Usernames in login and transfer requests (and the admin `username` filter) are at most 50 characters.
 
 **Client address and reverse proxies.** By default the client is the TCP peer address of the connection; `X-Forwarded-For` is ignored, so a client cannot dodge the per-IP limits by sending that header. Behind a reverse proxy or load balancer every request would come from the proxy's address and share one bucket, so set `app.rate-limit.trust-forwarded-headers=true` and `app.rate-limit.trusted-proxies=<number of proxies in front of the app>`. The client is then the entry that many positions from the RIGHT of `X-Forwarded-For` (each trusted proxy appends the address it received the request from; entries to the left can be written by the client and are ignored). If the header is shorter than expected or not an address, the peer address is used. Only enable this when the application is reachable ONLY through those proxies and they set/append the header; otherwise anyone connecting directly can forge it.
 
-**Limitations.** The counters live in this JVM's memory: with several instances each one counts on its own (the effective limit is multiplied) and a restart resets them; a multi-instance deployment needs a shared store such as Redis. Memory is bounded: at most `max-keys` keys per rule (least recently used evicted first, idle keys expire after one window). Users behind one shared address (office, school, mobile carrier NAT) share the per-IP buckets. Because the username bucket is shared across all IPs, someone who keeps guessing a name can keep that account's login slowed to one attempt per 12 seconds (a short throttle, never a lockout; the password stays safe). Details: `RATE_LIMITING_LOG.md`.
+**Limitations.** The counters live in this JVM's memory: with several instances each one counts on its own (the effective limit is multiplied) and a restart resets them; a multi-instance deployment needs a shared store such as Redis. Memory is bounded: at most `max-keys` keys per rule (least recently used evicted first, idle keys expire after one window) and `known-login-max` remembered (username, address) pairs. Users behind one shared address (office, school, mobile carrier NAT) share the per-IP buckets. IPv6 addresses are keyed in full (an attacker with a whole /64 can use many addresses). Details: `RATE_LIMITING_LOG.md`, `SECURITY_FIXES_ROUND3_LOG.md`.
 
 ## Design notes
 
