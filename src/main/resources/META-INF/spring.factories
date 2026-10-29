@@ -1,1 +1,2 @@
-org.springframework.boot.diagnostics.FailureAnalyzer=com.example.wallet.security.MissingJwtSecretFailureAnalyzer
+org.springframework.boot.diagnostics.FailureAnalyzer=com.example.wallet.security.MissingJwtSecretFailureAnalyzer,\
+  com.example.wallet.config.MissingDatabaseCredentialsFailureAnalyzer

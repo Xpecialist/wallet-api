@@ -72,7 +72,7 @@ class RateLimitFilterTest {
         RateLimits one = limits(true, 1, 5);
         assertThat(one.clientIp(req("10.0.0.1", "not-an-ip"))).isEqualTo("10.0.0.1");
         assertThat(one.clientIp(req("10.0.0.1", "1.2.3.4" + "5".repeat(60)))).isEqualTo("10.0.0.1");
-        assertThat(one.clientIp(req("10.0.0.1", "2001:DB8::1"))).isEqualTo("2001:db8::1");
+        assertThat(one.clientIp(req("10.0.0.1", "2001:DB8::1"))).isEqualTo("2001:db8:0:0:0:0:0:0"); // IPv6 is keyed on its /64 prefix
     }
 
     // ---- username normalization --------------------------------------------------------------------------------

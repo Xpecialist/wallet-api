@@ -36,6 +36,7 @@ public class RateLimitProperties {
     private boolean enabled = true;
     private boolean trustForwardedHeaders = false;
     private int trustedProxies = 1;
+    private int ipv6PrefixBits = 64;
     private int maxKeys = 50_000;
     private Rule loginIp = new Rule(5, Duration.ofMinutes(1));
     private Rule loginUsernameIp = new Rule(5, Duration.ofMinutes(1));
@@ -55,6 +56,8 @@ public class RateLimitProperties {
     public void setTrustForwardedHeaders(boolean v) { this.trustForwardedHeaders = v; }
     public int getTrustedProxies() { return trustedProxies; }
     public void setTrustedProxies(int trustedProxies) { this.trustedProxies = trustedProxies; }
+    public int getIpv6PrefixBits() { return ipv6PrefixBits; }
+    public void setIpv6PrefixBits(int ipv6PrefixBits) { this.ipv6PrefixBits = ipv6PrefixBits; }
     public int getMaxKeys() { return maxKeys; }
     public void setMaxKeys(int maxKeys) { this.maxKeys = maxKeys; }
     public Rule getLoginIp() { return loginIp; }

@@ -37,4 +37,18 @@ class RateLimitTrustedProxyIT extends RateLimitBase {
         for (int i = 0; i < 3; i++) assertThat(status(loginFrom(PROXY, "w" + i, "x-Passw0rd!"))).isEqualTo(401);
         assertThat(status(loginFrom(PROXY, "w9", "x-Passw0rd!"))).isEqualTo(429);
     }
+
+    @Test
+    void rotatingTheLow64BitsOfAForwardedIpv6ClientDoesNotResetTheBucket() throws Exception {
+        for (int i = 0; i < 3; i++) {
+            assertThat(status(loginFrom(PROXY, "x" + i, "x-Passw0rd!", "2001:db8:5:6::" + (i + 1)))).isEqualTo(401);
+        }
+        assertThat(status(loginFrom(PROXY, "x9", "x-Passw0rd!", "2001:db8:5:6:abcd::9"))).isEqualTo(429);
+    }
+
+    @Test
+    void anInvalidForwardedAddressFallsBackToTheProxyBucket() throws Exception {
+        for (int i = 0; i < 3; i++) assertThat(status(loginFrom(PROXY, "y" + i, "x-Passw0rd!", "dead:beef:::::" + i))).isEqualTo(401);
+        assertThat(status(loginFrom(PROXY, "y9", "x-Passw0rd!", "1.2.3.4.5.6"))).isEqualTo(429);
+    }
 }

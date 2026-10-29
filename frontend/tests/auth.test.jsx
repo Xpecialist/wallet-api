@@ -341,3 +341,101 @@ describe('route protection', () => {
   });
 });
 
+
+describe('logout failure notice on the login page (L-8)', () => {
+  const NOTICE = /You were signed out on this device, but the server could not be reached to end your session everywhere/;
+
+  async function logOut(handlers) {
+    const f = mockFetch({ ...authedHandlers(), ...handlers });
+    renderApp('/', { token: 'secret-token-123' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Log out' }));
+    await screen.findByRole('heading', { name: 'Log in' });
+    return { f, user };
+  }
+
+  it.each([
+    ['a network error', () => Promise.reject(new TypeError('Failed to fetch'))],
+    ['a 503', () => res(503)],
+    ['a 500', () => res(500, { error: 'boom' })],
+    ['a 429', () => res(429)],
+  ])('shows a warning notice on /login when the logout call fails with %s, and still clears the session', async (_n, answer) => {
+    await logOut({ 'POST /api/auth/logout': answer });
+    const notice = await screen.findByText(NOTICE);
+    expect(notice).toHaveTextContent('If this is a shared computer, sign in and out again or change your password.');
+    expect(notice.closest('.alert')).toHaveClass('alert-warning');
+    expect(notice.closest('.alert')).toHaveAttribute('role', 'status'); // a warning, not an error alert
+    expect(notice.textContent).not.toContain('secret-token-123'); // never leaks the token
+    expect(getToken()).toBeNull();
+    expect(sessionStorage.getItem('wallet.token')).toBeNull();
+  });
+
+  it('shows no notice when the logout call answers 401 (token already revoked or expired)', async () => {
+    const { f } = await logOut({ 'POST /api/auth/logout': res(401) });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
+    expect(f.callsTo('POST /api/auth/logout')).toHaveLength(1); // no retry loop
+    expect(getToken()).toBeNull();
+  });
+
+  it('shows no notice after a successful logout', async () => {
+    await logOut({ 'POST /api/auth/logout': res(204) });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
+    expect(getToken()).toBeNull();
+  });
+
+  it('does not retry the failed logout call', async () => {
+    const { f } = await logOut({ 'POST /api/auth/logout': res(503) });
+    await screen.findByText(NOTICE);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(f.callsTo('POST /api/auth/logout')).toHaveLength(1);
+  });
+
+  it('the notice disappears when the user navigates away from the login page', async () => {
+    const { user } = await logOut({ 'POST /api/auth/logout': res(503) });
+    await screen.findByText(NOTICE);
+    await user.click(screen.getByRole('link', { name: 'Register' }));
+    await screen.findByRole('heading', { name: 'Create account' });
+    await user.click(screen.getByRole('link', { name: 'Log in' }));
+    await screen.findByRole('heading', { name: 'Log in' });
+    expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
+  });
+
+  it('the notice disappears after a successful login and is not shown again after a normal logout', async () => {
+    const { f, user } = await logOut({
+      'POST /api/auth/login': res(200, { token: 'jwt-2' }),
+      'POST /api/auth/logout': res(503),
+    });
+    await screen.findByText(NOTICE);
+    await user.type(screen.getByLabelText('Username'), 'alice');
+    await user.type(screen.getByLabelText('Password'), 'secret123');
+    await user.click(screen.getByRole('button', { name: 'Log in' }));
+    expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
+    expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
+
+    // a later logout that works shows nothing, so the first failure left no state behind
+    mockFetch({ ...authedHandlers(), 'POST /api/auth/logout': res(204) });
+    await user.click(await screen.findByRole('button', { name: 'Log out' }));
+    await screen.findByRole('heading', { name: 'Log in' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
+    expect(f.callsTo('POST /api/auth/logout')).toHaveLength(1);
+  });
+
+  it('a logout failure that arrives after the user signed in again shows no notice', async () => {
+    let fail;
+    mockFetch({
+      ...authedHandlers(),
+      'POST /api/auth/logout': () => new Promise((_r, rej) => (fail = () => rej(new TypeError('late')))),
+    });
+    renderApp('/', { token: 'old' });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Log out' }));
+    await screen.findByRole('heading', { name: 'Log in' });
+    setToken('new-session');
+    fail();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
+  });
+});

@@ -48,6 +48,17 @@ class RateLimitIT extends RateLimitBase {
     }
 
     @Test
+    void rotatingTheLow64BitsOfAnIpv6ClientDoesNotResetTheLoginIpBucket() throws Exception {
+        // L-1: a host that owns a /64 must not get a fresh bucket per address
+        String[] sameSlash64 = {"2001:db8:aaaa:bbbb::1", "2001:db8:aaaa:bbbb:1234:5678:9abc:def0",
+                "2001:DB8:AAAA:BBBB:0:0:0:2", "2001:db8:aaaa:bbbb::3", "2001:db8:aaaa:bbbb:ffff:ffff:ffff:ffff"};
+        for (int i = 0; i < 5; i++) assertThat(status(loginFrom(sameSlash64[i], "rot" + i, WRONG))).isEqualTo(401);
+        assertThat(status(loginFrom("2001:db8:aaaa:bbbb:dead:beef:0:1", "rot9", WRONG))).as("new low bits").isEqualTo(429);
+        assertThat(status(loginFrom("2001:db8:aaaa:bbbb:0:0:0:77%eth0", "rot8", WRONG))).as("zone id").isEqualTo(429);
+        assertThat(status(loginFrom("2001:db8:aaaa:cccc::1", "rot7", WRONG))).as("another /64").isEqualTo(401);
+    }
+
+    @Test
     void the429HasTheProjectErrorShape() throws Exception {
         for (int i = 0; i < 5; i++) loginFrom("10.1.1.3", "u" + i, WRONG);
         MvcResult r = loginFrom("10.1.1.3", "u9", WRONG);

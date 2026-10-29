@@ -32,13 +32,13 @@ A simple digital wallet REST API built with Spring Boot 4.1, Java 17, Maven and 
    psql -U postgres -h localhost -c "CREATE DATABASE walletdb"
    ```
 
-2. Configure the app. `JWT_SECRET` is REQUIRED: there is no built-in default, and the app refuses to start without it
-   (it prints "No JWT signing secret is configured"). The other variables have defaults suitable for local development only.
+2. Configure the app. `DB_USERNAME`, `DB_PASSWORD` and `JWT_SECRET` are REQUIRED: there is no built-in default for any of them, and the app refuses to start without them (it prints "No database credentials are configured" or "No JWT signing secret is configured"). For local development only, `--spring.profiles.active=dev` supplies public dev defaults for all three (see below). The other variables have defaults suitable for local development.
 
 | Variable / property | Default | Purpose |
 |---|---|---|
-| `DB_USERNAME` | `postgres` | Database user (`spring.datasource.username`) |
-| `DB_PASSWORD` | `postgres` | Database password (`spring.datasource.password`) |
+| `DB_URL` | `jdbc:postgresql://localhost:5432/walletdb` | JDBC URL (`spring.datasource.url`); not a secret. Production: add `?sslmode=verify-full` |
+| `DB_USERNAME` | none (required) | Database user (`spring.datasource.username`). With the `dev` profile: `postgres` |
+| `DB_PASSWORD` | none (required) | Database password (`spring.datasource.password`). With the `dev` profile: a public dev-only default |
 | `JWT_SECRET` | none (required) | Base64-encoded HMAC secret (`app.jwt.secret`); must decode to at least 32 bytes. Not needed with `--spring.profiles.active=dev`, which supplies a public dev-only secret |
 | `ADMIN_PASSWORD` | empty | Password for the bootstrap admin (`app.admin.password`), at least 12 characters and at most 72 bytes. If empty, no admin is created; if too weak, an error is logged and no admin is created |
 | `app.jwt.expiration-ms` | `3600000` (1 hour) | Token lifetime |
@@ -47,7 +47,7 @@ A simple digital wallet REST API built with Spring Boot 4.1, Java 17, Maven and 
 | `app.admin.username` | `admin` | Username of the bootstrap admin |
 | `app.admin.email` | `admin@example.com` | Email of the bootstrap admin |
 
-The JDBC URL is `jdbc:postgresql://localhost:5432/walletdb` (edit `src/main/resources/application.properties` to change it). The `app.*` properties not backed by an environment variable can be overridden the usual Spring way, for example `--app.wallet.initial-balance=0` or the `APP_WALLET_INITIAL_BALANCE` environment variable.
+Flyway uses the same URL and credentials as the application. The `app.*` properties not backed by an environment variable can be overridden the usual Spring way, for example `--app.wallet.initial-balance=0` or the `APP_WALLET_INITIAL_BALANCE` environment variable.
 
 ## Run and build
 
@@ -63,10 +63,12 @@ The `dev` profile also binds the server to `127.0.0.1`, so only the same machine
 machine, set `SERVER_ADDRESS=0.0.0.0` together with your own private `JWT_SECRET` (never the public dev one), start Vite
 with `--host`, and allow ports 8080 and 5173 in the firewall.
 
-Without the profile and without `JWT_SECRET` the app stops at startup with a clear message. For a real run set a secret
+Without the profile and without `DB_USERNAME`, `DB_PASSWORD` and `JWT_SECRET` the app stops at startup with a clear message. For a real run set the database credentials and a secret
 instead (generate one, for example, with `[Convert]::ToBase64String((1..48 | % { Get-Random -Max 256 }))`):
 
 ```
+$env:DB_USERNAME = "<database user>"
+$env:DB_PASSWORD = "<database password>"
 $env:JWT_SECRET = "<base64 secret, at least 32 bytes decoded>"
 $env:ADMIN_PASSWORD = "<strong password>"
 mvn spring-boot:run
@@ -76,8 +78,14 @@ Build a jar:
 
 ```
 mvn clean package
-java -jar target/wallet-api-0.0.1-SNAPSHOT.jar --spring.profiles.active=dev    # local only; or set JWT_SECRET instead
+java -jar target/wallet-api-0.0.1-SNAPSHOT.jar --spring.profiles.active=dev    # local only; or set DB_USERNAME, DB_PASSWORD and JWT_SECRET instead
 ```
+
+Production notes for the database and secrets:
+
+- Use a least-privilege database user (it owns or can alter the schema objects Flyway manages, and nothing else; not the `postgres` superuser).
+- Encrypt the connection to the database through the JDBC URL, for example `DB_URL=jdbc:postgresql://db.internal:5432/walletdb?sslmode=verify-full` (with the CA certificate in the JVM trust store or `sslrootcert=`).
+- The old versions of `application.properties` committed the database password `postgres` and a public JWT secret, and both remain in git history. Rotate any database credential or `JWT_SECRET` that ever ran with those defaults (changing `JWT_SECRET` signs everybody out), and never reuse the `dev` profile values anywhere real.
 
 New wallets start at 0. To put money into a wallet, log in as the admin and call `POST /api/admin/wallets/{id}/deposit`
 (or use the admin "Deposit to wallet" page of the frontend). For a throwaway local demo you can pre-fund new wallets with
@@ -349,7 +357,7 @@ Brute-force and flood protection with in-memory token buckets (no extra dependen
 | `money-user` | `POST /api/transactions/transfer`, `/api/wallets/me/withdraw`, `/api/deposit-requests` (one shared bucket) | authenticated user | every attempt | 30 per 1 minute |
 | `admin-user` | admin deposit, approve and reject | authenticated user | every attempt | 120 per 1 minute |
 
-Properties (all under `app.rate-limit.`): `enabled` (master switch, default `true`), `<rule>.capacity` and `<rule>.window` for each rule above (for example `login-ip.capacity=5`, `login-ip.window=1m`; durations like `30s`, `15m`, `1h`), `known-login-ttl` (default `7d`), `known-login-max` (default 10000), `max-keys` (default 50000), `trust-forwarded-headers` (default `false`) and `trusted-proxies` (default 1). The defaults are in `application.properties`. (The old `login-username.*` properties were replaced by `login-username-ip.*` and `login-username-failures.*`; unknown property names are ignored by Spring, so remove old ones from your configuration.)
+Properties (all under `app.rate-limit.`): `enabled` (master switch, default `true`), `<rule>.capacity` and `<rule>.window` for each rule above (for example `login-ip.capacity=5`, `login-ip.window=1m`; durations like `30s`, `15m`, `1h`), `known-login-ttl` (default `7d`), `known-login-max` (default 10000), `max-keys` (default 50000), `trust-forwarded-headers` (default `false`), `trusted-proxies` (default 1) and `ipv6-prefix-bits` (default 64, valid 1 to 128). The defaults are in `application.properties`. (The old `login-username.*` properties were replaced by `login-username-ip.*` and `login-username-failures.*`; unknown property names are ignored by Spring, so remove old ones from your configuration.)
 
 When a limit is exceeded the API answers **429** with a `Retry-After` header (whole seconds) and the usual error body:
 
@@ -369,6 +377,8 @@ The limits run first in the security chain, before token parsing or any BCrypt w
 **Request bodies.** Bodies under `/api/**` are capped at `app.max-body-bytes` (default 65536): a larger one gets **413** in the usual JSON error shape before authentication or parsing (a declared `Content-Length` over the cap is refused without reading; a chunked body is read at most one byte past the cap). The login body is additionally limited to 8192 bytes, must be `application/json` (or `+json`) in UTF-8 (otherwise 415), and must be one JSON object without duplicate keys whose `username` is a non-blank string (otherwise 400): the rate limiter reads the username from the body, so it must see exactly what the controller will, and anything ambiguous is refused before any password is checked. Usernames in login and transfer requests (and the admin `username` filter) are at most 50 characters.
 
 **Client address and reverse proxies.** By default the client is the TCP peer address of the connection; `X-Forwarded-For` is ignored, so a client cannot dodge the per-IP limits by sending that header. Behind a reverse proxy or load balancer every request would come from the proxy's address and share one bucket, so set `app.rate-limit.trust-forwarded-headers=true` and `app.rate-limit.trusted-proxies=<number of proxies in front of the app>`. The client is then the entry that many positions from the RIGHT of `X-Forwarded-For` (each trusted proxy appends the address it received the request from; entries to the left can be written by the client and are ignored). If the header is shorter than expected or not an address, the peer address is used. Only enable this when the application is reachable ONLY through those proxies and they set/append the header; otherwise anyone connecting directly can forge it.
+
+**IPv6 clients.** Per-IP rules key an IPv6 client on its address prefix, the first `app.rate-limit.ipv6-prefix-bits` bits (default 64), not on the full address: a host with a /64 can otherwise rotate through 2^64 addresses and never meet a limit. IPv4 clients stay per address, an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) counts as that IPv4 address, and zone ids (`%eth0`), letter case and `::` compression do not matter (all spellings of an address share a bucket). The trade-off: clients that share a prefix share the limits; a /64 is normally one subscriber or one host, but if your users sit behind larger shared blocks lower the value (for example 56 or 48), and for a flat internal network where every address is a different client raise it to 128. With `trust-forwarded-headers=true` the `X-Forwarded-For` entry must be a valid IP literal (it is parsed by hand, never resolved through DNS); anything else falls back to the peer address.
 
 **Limitations.** The counters live in this JVM's memory: with several instances each one counts on its own (the effective limit is multiplied) and a restart resets them; a multi-instance deployment needs a shared store such as Redis. Memory is bounded: at most `max-keys` keys per rule (least recently used evicted first, idle keys expire after one window) and `known-login-max` remembered (username, address) pairs. Users behind one shared address (office, school, mobile carrier NAT) share the per-IP buckets. IPv6 addresses are keyed in full (an attacker with a whole /64 can use many addresses). Details: `RATE_LIMITING_LOG.md`, `SECURITY_FIXES_ROUND3_LOG.md`.
 
@@ -409,5 +419,5 @@ wallet-api
 ## Status and limitations
 
 - Automated tests: `mvn test` (unit, no database), `mvn verify` (also the integration tests against a separate empty database `walletdb_test`), `cd frontend && npm test`. See `TEST_FINDINGS.md`, `SECURITY_FIXES_LOG.md`.
-- Not done yet (see `TEST_FINDINGS.md`): DB credential hardening. Rate limiting is in memory and per instance (see [Rate limiting](#rate-limiting)).
-- Defaults are for local development only: the `postgres`/`postgres` database credentials and the plain JDBC URL. There is no default JWT secret.
+- Rate limiting is in memory and per instance (see [Rate limiting](#rate-limiting)).
+- There is no default database user, database password or JWT secret outside the local-only `dev` profile; the default JDBC URL is a plain local one (see the production notes under Run and build).

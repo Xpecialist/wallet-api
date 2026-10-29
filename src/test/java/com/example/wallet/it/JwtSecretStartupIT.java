@@ -18,6 +18,9 @@ import org.springframework.context.ConfigurableApplicationContext;
 class JwtSecretStartupIT {
     private static final String TEST_DB = "--spring.datasource.url=jdbc:postgresql://localhost:5432/walletdb_test";
 
+    private static final String DB_USER = System.getenv().getOrDefault("DB_USERNAME", "postgres");
+    private static final String DB_PASSWORD = System.getenv().getOrDefault("DB_PASSWORD", "postgres");
+
     private static SpringApplication app() {
         SpringApplication app = new SpringApplication(WalletApiApplication.class);
         app.setWebApplicationType(WebApplicationType.NONE);
@@ -28,7 +31,8 @@ class JwtSecretStartupIT {
     @Test
     void startupFailsFastWithoutAJwtSecret() {
         // an empty value is what an unset JWT_SECRET resolves to in application.properties
-        assertThatThrownBy(() -> app().run(TEST_DB, "--app.jwt.secret=", "--app.admin.password="))
+        assertThatThrownBy(() -> app().run(TEST_DB, "--app.jwt.secret=", "--DB_USERNAME=" + DB_USER, "--DB_PASSWORD=" + DB_PASSWORD,
+                "--app.admin.password="))
                 .hasRootCauseInstanceOf(MissingJwtSecretException.class);
     }
 

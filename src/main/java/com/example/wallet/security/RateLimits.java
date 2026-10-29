@@ -6,7 +6,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -19,12 +18,11 @@ import tools.jackson.databind.json.JsonMapper;
 @Component
 public class RateLimits {
     private static final String FORWARDED_FOR = "X-Forwarded-For";
-    /** Longest IP text accepted from X-Forwarded-For (an IPv6 address with an embedded IPv4 is 45 characters). */
-    private static final int MAX_IP_LENGTH = 45;
 
     private final boolean enabled;
     private final boolean trustForwardedHeaders;
     private final int trustedProxies;
+    private final int ipv6PrefixBits;
     private final JsonMapper mapper;
     final TokenBucketLimiter globalIp;
     final TokenBucketLimiter loginIp;
@@ -48,6 +46,10 @@ public class RateLimits {
         this.enabled = p.isEnabled();
         this.trustForwardedHeaders = p.isTrustForwardedHeaders();
         this.trustedProxies = Math.max(1, p.getTrustedProxies());
+        if (p.getIpv6PrefixBits() < 1 || p.getIpv6PrefixBits() > 128) {
+            throw new IllegalArgumentException("app.rate-limit.ipv6-prefix-bits must be between 1 and 128");
+        }
+        this.ipv6PrefixBits = p.getIpv6PrefixBits();
         this.mapper = mapper;
         this.globalIp = limiter(p.getGlobalIp(), p);
         this.loginIp = limiter(p.getLoginIp(), p);
@@ -78,41 +80,35 @@ public class RateLimits {
     }
 
     /**
-     * The address a request is attributed to. By default this is the TCP peer address; a client cannot change it.
+     * The key a request is attributed to. By default the address is the TCP peer address; a client cannot change it.
      * With {@code trust-forwarded-headers=true} it is taken from {@code X-Forwarded-For}, counting from the RIGHT:
      * every trusted proxy appends the address it received the request from, so the entry {@code trusted-proxies}
      * positions from the right is the last one a trusted proxy vouches for, and anything further left (which the client
      * can write freely) is ignored. If the header has fewer entries than there are trusted proxies, or the entry is not
-     * address-like, the peer address is used.
+     * a valid IP literal, the peer address is used. The address is then normalized by {@link ClientAddress}: IPv6
+     * clients share a key per {@code ipv6-prefix-bits} prefix (default /64), IPv4-mapped IPv6 counts as IPv4.
      *
      * @param request the request
-     * @return the address used as rate-limit key
+     * @return the key used for the per-IP buckets
      */
     String clientIp(HttpServletRequest request) {
         String peer = request.getRemoteAddr();
-        if (!trustForwardedHeaders) return peer;
-        List<String> entries = new ArrayList<>();
-        for (String header : Collections.list(request.getHeaders(FORWARDED_FOR))) {
-            for (String part : header.split(",")) {
-                String t = part.trim();
-                if (!t.isEmpty()) entries.add(t);
+        if (trustForwardedHeaders) {
+            List<String> entries = new ArrayList<>();
+            for (String header : Collections.list(request.getHeaders(FORWARDED_FOR))) {
+                for (String part : header.split(",")) {
+                    String t = part.trim();
+                    if (!t.isEmpty()) entries.add(t);
+                }
+            }
+            int index = entries.size() - trustedProxies;
+            if (index >= 0) {
+                String key = ClientAddress.key(entries.get(index), ipv6PrefixBits);
+                if (key != null) return key;
             }
         }
-        int index = entries.size() - trustedProxies;
-        if (index < 0) return peer;
-        String candidate = entries.get(index);
-        return looksLikeIp(candidate) ? candidate.toLowerCase(Locale.ROOT) : peer;
-    }
-
-    private static boolean looksLikeIp(String s) {
-        if (s.isEmpty() || s.length() > MAX_IP_LENGTH) return false;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            boolean ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
-                    || c == '.' || c == ':';
-            if (!ok) return false;
-        }
-        return true;
+        String key = ClientAddress.key(peer, ipv6PrefixBits);
+        return key != null ? key : peer;
     }
 
     /**

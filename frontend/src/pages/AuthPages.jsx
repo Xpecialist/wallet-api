@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
@@ -7,7 +7,7 @@ import { Form, TextField } from '../components/Fields.jsx';
 import { BrandMark } from '../components/Layout.jsx';
 
 /** Shared shell for the login and register forms. */
-function AuthPage({ title, submitText, request, fields, footer }) {
+function AuthPage({ title, submitText, request, fields, footer, notice }) {
   const { authenticated, signIn } = useAuth();
   const navigate = useNavigate();
   const [values, setValues] = useState({ username: '', email: '', password: '' });
@@ -56,14 +56,23 @@ function AuthPage({ title, submitText, request, fields, footer }) {
           ))}
         </Form>
         <Alert>{error}</Alert>
+        <Alert type="warning">{notice}</Alert>
         <p className="muted">{footer}</p>
       </section>
     </div>
   );
 }
 
+/** Shown on the login page after a sign-out whose server call failed (the token may still be valid elsewhere). */
+const LOGOUT_NOTICE =
+  'You were signed out on this device, but the server could not be reached to end your session everywhere. ' +
+  'If this is a shared computer, sign in and out again or change your password.';
+
 /** Login page (POST /api/auth/login). */
 export function LoginPage() {
+  const { logoutNotice, dismissLogoutNotice } = useAuth();
+  // the notice lasts until the user leaves this page (or signs in), so it never lingers across navigation
+  useEffect(() => dismissLogoutNotice, [dismissLogoutNotice]);
   return (
     <AuthPage
       title="Log in"
@@ -73,6 +82,7 @@ export function LoginPage() {
         { name: 'username', label: 'Username', autoComplete: 'username' },
         { name: 'password', label: 'Password', type: 'password', autoComplete: 'current-password' },
       ]}
+      notice={logoutNotice ? LOGOUT_NOTICE : ''}
       footer={<>No account? <Link to="/register">Register</Link></>}
     />
   );
