@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fills a running backend with a rich, realistic DEMO dataset through the real API.
 # Re-runnable: every money action uses a fixed Idempotency-Key, so a second run replays
-# instead of duplicating (see SEED_DATA_LOG.md). Needs bash + curl + sed/grep/awk (Git Bash is fine).
+# instead of duplicating (see docs/SEED_DATA_LOG.md). Needs bash + curl + sed/grep/awk (Git Bash is fine).
 #
 #   ADMIN_PASSWORD='<the admin password>' bash scripts/seed-dev-data.sh
 #
