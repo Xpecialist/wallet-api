@@ -2,6 +2,8 @@
 
 A simple digital wallet REST API built with Spring Boot 4.1, Java 17, Maven and PostgreSQL.
 
+> **Portfolio case study:** [CASE_STUDY.md](CASE_STUDY.md) (how this was built and checked with AI agents). **Run it yourself:** [DEMO.md](DEMO.md).
+
 ## Features
 
 - User registration and login with JWT authentication (Spring Security, stateless)
