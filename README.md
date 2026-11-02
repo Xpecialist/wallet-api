@@ -382,6 +382,23 @@ The limits run first in the security chain, before token parsing or any BCrypt w
 
 **Limitations.** The counters live in this JVM's memory: with several instances each one counts on its own (the effective limit is multiplied) and a restart resets them; a multi-instance deployment needs a shared store such as Redis. Memory is bounded: at most `max-keys` keys per rule (least recently used evicted first, idle keys expire after one window) and `known-login-max` remembered (username, address) pairs. Users behind one shared address (office, school, mobile carrier NAT) share the per-IP buckets. IPv6 addresses are keyed in full (an attacker with a whole /64 can use many addresses). Details: `RATE_LIMITING_LOG.md`, `SECURITY_FIXES_ROUND3_LOG.md`.
 
+## Demo data
+
+`scripts/seed-dev-data.sh` fills a running backend with a realistic demo dataset through the real API (bash + curl only; run it in Git Bash). It creates 11 users (`alice`, `bob`, `carol`, `dave`, `erin`, `frank`, `grace`, `heidi`, `ivan`, `judy`, `mallory`), admin deposits, about 40 transfers with realistic notes, 8 withdrawals, deposit requests in every state (3 pending, 3 approved, 2 rejected) and finally disables `mallory` so the admin Users page has something to show.
+
+```
+ADMIN_PASSWORD='<the admin password>' bash scripts/seed-dev-data.sh
+```
+
+- Environment: `API` (default `http://localhost:8080`; a non-localhost API is refused unless `SEED_ALLOW_REMOTE=1`), `ADMIN_USER` (default `admin`), `ADMIN_PASSWORD` (required, never printed), `SEED_PASSWORD` (password of the demo users; the built-in default is dev-only).
+- Set `ADMIN_PASSWORD` and `SEED_PASSWORD` through environment variables and use your own strong values for any shared or real demo; never keep the dev default there.
+- With the default rate limits the script waits on 429 answers (`Retry-After`), but registration is limited to 5 per hour per IP, so a fresh database (6 new users) needs the limits off for the seeding run: start the backend with `mvn spring-boot:run "-Dspring-boot.run.profiles=dev" "-Dspring-boot.run.arguments=--app.rate-limit.enabled=false"`, run the script, then restart normally. The script stops with this advice when a wait would exceed 180 seconds.
+- Re-runnable: every money action has a fixed `Idempotency-Key`, so a second run replays instead of duplicating, and the database is unchanged.
+- The data lives in the database. A push to `main` does not carry data: the demo environment must run the script once against its own database.
+- Reset: drop and recreate the database (or point the app at a fresh one) and start the backend again; Flyway recreates the schema and the admin.
+
+Details and test evidence: `SEED_DATA_LOG.md`.
+
 ## Design notes
 
 - **JWT auth.** Tokens are HMAC-signed with the Base64 secret in `app.jwt.secret`, with the username as subject, the user's token version (`tv`, see [Token revocation](#token-revocation)) plus issued-at and expiry. `JwtAuthFilter` validates the bearer token and loads the user (and current role) from the database on each request. Sessions and CSRF are disabled. Missing or invalid tokens leave the request unauthenticated; protected endpoints then return 401. Authenticated non-admins on `/api/admin/**` get 403. The container's error forward to `/error` is public (dispatcher type ERROR) so error forwards keep their real status; a direct request to `/error` is denied (401/403), never a 500. Multipart is disabled (no uploads), so `multipart/form-data` gets 415. Login compares the password before checking the disabled flag (no timing difference) and treats passwords over 72 bytes as wrong.
