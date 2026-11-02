@@ -111,4 +111,4 @@ Stop the backend, `DROP DATABASE walletdb`, create it again and repeat from step
 
 ## Read more
 
-The story of how the project was built and checked: [CASE_STUDY.md](CASE_STUDY.md). API and design details: [README.md](README.md).
+The story of how the project was built and checked: [CASE_STUDY.md](CASE_STUDY.md). API and design details: [README.md](../README.md).
